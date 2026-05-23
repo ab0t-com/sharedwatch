@@ -1,0 +1,45 @@
+# sharedwatch gitleaks config.
+# Extends the upstream default ruleset and adds project-specific allowlists
+# for known false positives (test fixtures, design-doc examples).
+#
+# Docs: https://github.com/gitleaks/gitleaks#configuration
+[extend]
+useDefault = true
+
+[allowlist]
+description = "sharedwatch project-level allowlist"
+
+# Files / paths that contain intentional fake-secret strings used as test
+# fixtures or documentation examples. These have all been audited by hand.
+paths = [
+  # Free-form team docs (design discussions, reports, specs, agent docs,
+  # dogfood scenarios + findings — anything under docs/) often quote example
+  # tokens for illustrative purposes.
+  '''(^|/)docs/.*\.md$''',
+  # Onboarding/operating skills include shell snippets with placeholder creds.
+  '''(^|/)Skills/.*\.(md|sh)$''',
+  # Go test files use canned fixture values.
+  '''(^|/)src/internal/.*_test\.go$''',
+  # Tickets quote example outputs that may include placeholder tokens.
+  '''(^|/)tickets/.*\.md$''',
+  # Static landing page is hand-authored; no real secrets.
+  '''(^|/)html/.*\.html$''',
+]
+
+# Per-file inline marker also works: append `# gitleaks:allow` to the line.
+# Use sparingly — prefer rotating the secret over allowlisting it.
+
+# Common test placeholder values that the default ruleset over-eagerly flags.
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',                      # canonical AWS example key
+  '''wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY''',  # canonical AWS example secret
+  '''ghp_[0-9A-Za-z]{36}FAKEFAKE''',               # explicitly suffixed fake
+  '''(?i)example[_-]?(api|token|secret|key)''',    # docs-only placeholder
+]
+
+# Commits we know contain (audited, intentional) test secrets that survived
+# pre-merge — leave empty unless an incident requires it. Populate with full
+# commit SHAs and a NOTE pointing at the incident write-up.
+# commits = [
+#   "0123456789abcdef0123456789abcdef01234567",  # SW-INC-001: see docs/INCIDENTS/
+# ]

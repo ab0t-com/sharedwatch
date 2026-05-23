@@ -1,0 +1,63 @@
+# sharedwatch — release manifest (template)
+#
+# This is the in-repo template. Each cut release produces a fully-populated
+# manifest at dist/manifest.yaml (see scripts/release.sh), which is then
+# uploaded alongside the release tarballs on GitHub. The installer
+# (scripts/install.sh) downloads that per-release manifest to verify the
+# tarball SHA-256 before installing.
+#
+# Fields populated here vs. at release time:
+#   - name, license, source, repo_layout, supported_platforms: stable
+#   - version, released_at, artifacts[].sha256, artifacts[].size_bytes:
+#     filled in by scripts/release.sh
+name: sharedwatch
+description: Calm, durable, pull-based activity feed for a local shared folder.
+license: MIT
+license_file: LICENSE
+source: "https://github.com/ab0t/sharedwatch"
+homepage: "https://github.com/ab0t/sharedwatch"
+
+# Replaced per-release by scripts/release.sh
+version: "0.0.0-unreleased"
+released_at: "1970-01-01T00:00:00Z"
+
+# What ships in each release tarball (alongside the binary itself):
+bundle_includes:
+  - sharedwatch     # the binary
+  - LICENSE
+  - README.md
+
+# Supported build matrix (also encoded in scripts/release.sh).
+supported_platforms:
+  - linux/amd64
+  - linux/arm64
+  - darwin/amd64
+  - darwin/arm64
+
+# Where the source lives in the repo.
+repo_layout:
+  go_module_root: src/
+  binary_entrypoint: src/cmd/sharedwatch/main.go
+  internal_packages: src/internal/
+  docs: src/docs/
+  examples: src/examples/
+
+# Build prerequisites.
+build:
+  go_version: ">=1.22"
+  cgo: disabled
+  ldflags: "-s -w -X main.Version=<version>"
+
+# Security policy.
+security:
+  secrets_scanner: gitleaks
+  gitleaks_version: ">=8.24.3"
+  gitleaks_config: .gitleaks.toml
+  hooks_location: .git/hooks/  # local-only; not version-controlled
+
+# Artifacts. Populated by scripts/release.sh per release.
+# Format expected by scripts/install.sh:
+#   - file: <tarball name>
+#     sha256: <hex>
+#     size_bytes: <int>
+artifacts: []
