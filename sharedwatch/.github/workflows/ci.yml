@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt -l found unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./... -count=1 -race
+
+      - name: build
+        run: |
+          mkdir -p .bin
+          go build -ldflags "-X main.Version=${{ github.sha }}" -o .bin/sharedwatch ./cmd/sharedwatch
+
+      - name: smoke (init + status + emit + consume)
+        run: |
+          mkdir -p /tmp/sw-ci/watch
+          export XDG_DATA_HOME=/tmp/sw-ci/xdg
+          ./.bin/sharedwatch --watch-path /tmp/sw-ci/watch --db /tmp/sw-ci/queue.db init
+          ./.bin/sharedwatch --watch-path /tmp/sw-ci/watch --db /tmp/sw-ci/queue.db test emit ci.md
+          ./.bin/sharedwatch --watch-path /tmp/sw-ci/watch --db /tmp/sw-ci/queue.db consume
+          ./.bin/sharedwatch --watch-path /tmp/sw-ci/watch --db /tmp/sw-ci/queue.db digest list
