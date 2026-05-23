@@ -25,6 +25,16 @@ type Config struct {
 	HashEnabled       bool
 	HashMaxSize       int64 // bytes; files larger than this aren't hashed even if HashEnabled
 	ProducerID        string
+	// ActorTTL determines when a registered actor (via `sharedwatch actor
+	// heartbeat ...`) is considered stale. status --actors flags rows past
+	// this threshold; the retention pass deletes rows past 2× this value.
+	ActorTTL time.Duration
+	// PayloadJSON is stamped onto every event emitted during the lifetime of
+	// this Config (watcher diffs, reconcile cold-starts). Empty = no default
+	// payload (the historical behaviour). Populated by the CLI when any of
+	// --actor / --session / --task / --intent / --addressee / --ref / --tag is
+	// set on the root flagset.
+	PayloadJSON string
 }
 
 // defaultDataHome resolves the XDG_DATA_HOME spec: $XDG_DATA_HOME if set,
@@ -65,5 +75,6 @@ func Default() Config {
 		HashEnabled:       false,
 		HashMaxSize:       1 << 20, // 1 MB
 		ProducerID:        fmt.Sprintf("%s:%d", host, os.Getpid()),
+		ActorTTL:          5 * time.Minute,
 	}
 }

@@ -50,6 +50,12 @@ type Adapter interface {
 	ListCursors(ctx context.Context) ([]NamedCursor, error)
 	RawSQL(ctx context.Context, query string, allowWrite bool) ([]string, [][]any, error)
 	Schema(ctx context.Context) ([]TableInfo, error)
+
+	// Actors registry (SW-AGENT-8).
+	UpsertActorHeartbeat(ctx context.Context, r ActorRecord) error
+	GetActor(ctx context.Context, actorID string) (ActorRecord, bool, error)
+	ListActors(ctx context.Context) ([]ActorRecord, error)
+	PruneStaleActors(ctx context.Context, olderThan time.Duration) (int64, error)
 }
 
 func OpenAdapter(ctx context.Context, storageType string, dbPath string) (Adapter, error) {

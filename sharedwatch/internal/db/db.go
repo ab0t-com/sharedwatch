@@ -105,6 +105,15 @@ func (s *Store) migrate(ctx context.Context) error {
 			last_id TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);`,
+		`CREATE TABLE IF NOT EXISTS actors (
+			actor_id TEXT PRIMARY KEY,
+			label TEXT NOT NULL DEFAULT '',
+			actor_kind TEXT NOT NULL DEFAULT '',
+			focus TEXT NOT NULL DEFAULT '',
+			last_heartbeat TEXT NOT NULL,
+			metadata_json TEXT NOT NULL DEFAULT '{}'
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_actors_last_heartbeat ON actors(last_heartbeat);`,
 	}
 	for _, stmt := range stmts {
 		if _, err := s.DB.ExecContext(ctx, stmt); err != nil {
@@ -170,6 +179,10 @@ func (s *Store) InsertEvent(ctx context.Context, e events.Event) error {
 	return nil
 }
 
+// FindRecentPendingByRelPath returns the most recent pending event on relPath
+// regardless of actor. Retained for callers that don't care about attribution.
+// New coalesce paths should use FindRecentPendingByRelPathAndActor instead so
+// cross-actor events are kept distinct (see SW-AGENT-11).
 func (s *Store) FindRecentPendingByRelPath(ctx context.Context, relPath string, since time.Time) (events.Event, bool, error) {
 	row := s.DB.QueryRowContext(ctx, `SELECT id, type, path, rel_path, old_path, source, status, retry_count, observed_at, file_size, mtime, content_hash, coalesced_into, payload_json, producer_id
 		FROM events WHERE rel_path = ? AND status = 'pending' AND observed_at >= ? ORDER BY observed_at DESC LIMIT 1`, relPath, since.UTC().Format(time.RFC3339Nano))
@@ -181,6 +194,38 @@ func (s *Store) FindRecentPendingByRelPath(ctx context.Context, relPath string, 
 		return events.Event{}, false, fmt.Errorf("find recent pending: %w", err)
 	}
 	return e, true, nil
+}
+
+// FindRecentPendingByRelPathAndActor returns the most recent pending event on
+// relPath whose payload_json.actor equals the supplied actor. This is the
+// actor-aware coalesce lookup. Empty actor matches events whose payload_json
+// lacks an actor key (preserves single-tenant behaviour from before
+// SW-AGENT-11).
+//
+// Implementation: we fetch a small bounded set of recent candidates and filter
+// actor in Go using events.ExtractActor. This avoids depending on SQLite's
+// JSON1 extension for a query that runs on every event insert.
+func (s *Store) FindRecentPendingByRelPathAndActor(ctx context.Context, relPath, actor string, since time.Time) (events.Event, bool, error) {
+	const candidateLimit = 16
+	rows, err := s.DB.QueryContext(ctx, `SELECT id, type, path, rel_path, old_path, source, status, retry_count, observed_at, file_size, mtime, content_hash, coalesced_into, payload_json, producer_id
+		FROM events WHERE rel_path = ? AND status = 'pending' AND observed_at >= ? ORDER BY observed_at DESC LIMIT ?`, relPath, since.UTC().Format(time.RFC3339Nano), candidateLimit)
+	if err != nil {
+		return events.Event{}, false, fmt.Errorf("find recent pending (actor): %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		e, err := scanEvent(rows)
+		if err != nil {
+			return events.Event{}, false, fmt.Errorf("scan candidate: %w", err)
+		}
+		if events.ExtractActor(e.PayloadJSON) == actor {
+			return e, true, nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return events.Event{}, false, fmt.Errorf("iterate candidates: %w", err)
+	}
+	return events.Event{}, false, nil
 }
 
 type rowScanner interface {
@@ -222,7 +267,12 @@ func (s *Store) UpdateEvent(ctx context.Context, e events.Event) error {
 }
 
 func (s *Store) InsertOrCoalesceEvent(ctx context.Context, e events.Event, window time.Duration) error {
-	existing, ok, err := s.FindRecentPendingByRelPath(ctx, e.RelPath, e.Timestamp.Add(-window))
+	// Actor-aware coalesce: only merge with a prior pending event on the same
+	// path that belongs to the SAME actor. Two different actors editing the
+	// same file inside the window remain distinct rows (SW-AGENT-11). Empty
+	// actor coalesces with empty actor (legacy single-tenant behaviour).
+	actor := events.ExtractActor(e.PayloadJSON)
+	existing, ok, err := s.FindRecentPendingByRelPathAndActor(ctx, e.RelPath, actor, e.Timestamp.Add(-window))
 	if err != nil {
 		return err
 	}

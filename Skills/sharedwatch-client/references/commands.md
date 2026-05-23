@@ -29,6 +29,14 @@ Set BEFORE the subcommand: `sharedwatch <global flags> <subcommand> <subflags>`.
 | `--include <pat>` | (empty) | Repeatable, comma-aware; include-only filter applied BEFORE ignores. Empty = include all. |
 | `--hash on\|off` | `off` | Enable per-file SHA-256 content hashing (skips files above `HashMaxSize`, default 1 MB) |
 | `--producer <str>` | `<host>:<pid>` | Sets `events.producer_id` stamped on emitted events. **Flag is `--producer` (singular), not `--producer-id`.** |
+| `--actor <id>` | (empty) | payload_json v1 attribution — see "Attribution flags" below |
+| `--actor-kind <k>` | (empty) | `human` / `ai_agent` / `automation` |
+| `--session <id>` | (empty) | logical-run id |
+| `--task <label>` | (empty) | short work label |
+| `--intent <text>` | (empty) | one-sentence reason |
+| `--addressee <id>` | (empty) | who the change is FOR |
+| `--ref <event-id>` | (empty) | causal predecessor (ref_event_id) |
+| `--tag <t>` | (empty) | payload tag (repeatable, comma-aware) |
 | `--log-format text\|json` | `text` | `json` for log aggregators |
 | `--log-level debug\|info\|warn\|error` | `info` | |
 | `--version` | — | Same as the `version` subcommand |
@@ -169,12 +177,31 @@ Reconcile re-snapshots the folder, diffs against the last reconcile snapshot, an
 ## 9. Synthetic emission
 
 ```bash
-sharedwatch test emit <relpath>                           # default payload
-sharedwatch test emit <relpath> --type file.created       # specify type
-sharedwatch test emit <relpath> --payload '{"actor":...}'  # custom payload_json
+sharedwatch test emit <relpath>                                       # default payload
+sharedwatch test emit <relpath> --actor X --session Y --task Z ...    # SW-AGENT-7 flags
+sharedwatch test emit <relpath> --payload '{"k":"v"}'                 # raw JSON
 ```
 
-`relpath` is interpreted relative to `--watch-path`. Paths escaping the root are rejected. Today this is the primary mechanism for attaching attribution to an event the agent caused.
+`relpath` is interpreted relative to `--watch-path`. Paths escaping the root are rejected.
+
+Attribution flags (`--actor`, `--actor-kind`, `--session`, `--task`, `--intent`, `--addressee`, `--ref`, `--tag`) are available on `test emit` AND inherit from the root flagset when both forms are used; subcommand non-empty values override root per-field. **`--payload` is mutually exclusive with the attribution flags on the same command** — pick one form.
+
+### Attribution flags
+
+Available on root (apply to every event during the invocation, including watcher-detected events during `run`) and on `test emit` (override per-event). Flag-to-payload-key mapping:
+
+| Flag | payload_json key |
+|---|---|
+| `--actor` | `actor` |
+| `--actor-kind` | `actor_kind` |
+| `--session` | `session` |
+| `--task` | `task` |
+| `--intent` | `intent` |
+| `--addressee` | `addressee` |
+| `--ref` | `ref_event_id` |
+| `--tag` (repeatable) | `tags[]` |
+
+`schema_version` is always set to `1` on the emitted payload; you do not need to (and cannot) override it.
 
 ## 10. Output formats
 

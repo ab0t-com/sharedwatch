@@ -70,6 +70,10 @@ func Load(path string, base Config) (Config, error) {
 			if n, err := strconv.Atoi(val); err == nil {
 				cfg.RetentionDays = n
 			}
+		case "actor_ttl":
+			if d, err := time.ParseDuration(val); err == nil {
+				cfg.ActorTTL = d
+			}
 		}
 	}
 	return cfg, s.Err()

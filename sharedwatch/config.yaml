@@ -15,3 +15,4 @@
 # max_batch_size: 100
 # ignore_patterns: .git,.DS_Store,*.tmp,*.swp
 # retention_days: 30
+# actor_ttl: 5m              # staleness threshold for `status --actors` and actor-prune retention

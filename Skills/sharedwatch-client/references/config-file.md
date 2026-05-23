@@ -37,6 +37,7 @@ reconcile_interval: 30m
 max_batch_size: 100                 # int
 ignore_patterns: .git,.DS_Store,*.tmp,*.swp   # CSV string
 retention_days: 30                  # int
+actor_ttl: 5m                       # time.Duration — stale threshold for `status --actors`
 ```
 
 That is the complete set. **The `storage_type` line in the example config.yaml is not actually parsed** — it's documentation only.
@@ -57,6 +58,7 @@ That is the complete set. **The `storage_type` line in the example config.yaml i
 | `max_batch_size` | `100` | |
 | `ignore_patterns` | `.git, .DS_Store, *.tmp, *.swp` | |
 | `retention_days` | `30` | |
+| `actor_ttl` | `5m` | drives `status --actors` staleness flag + reconcile-pass actor prune (2×TTL) |
 
 ## 4. Fields that are flag-only (NOT in config.yaml)
 

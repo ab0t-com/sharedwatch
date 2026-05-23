@@ -28,6 +28,11 @@ type Service struct {
 	HashEnabled     bool
 	HashMaxSize     int64
 	ProducerID      string
+	// PayloadJSON is the default payload_json applied to every event produced
+	// by the watcher (auto-detected diffs, cold-start creates) when the event
+	// does not already carry a payload. Synthetic emits via
+	// EmitSyntheticWithPayload still win when they pass an explicit payload.
+	PayloadJSON string
 }
 
 func (s Service) EmitSynthetic(ctx context.Context, relPath string, typ events.Type, source events.Source) (events.Event, error) {
@@ -36,14 +41,20 @@ func (s Service) EmitSynthetic(ctx context.Context, relPath string, typ events.T
 
 // EmitSyntheticWithPayload behaves like EmitSynthetic but lets callers attach
 // arbitrary JSON metadata. payloadJSON must already be valid JSON (or empty,
-// in which case a default `{"synthetic":true,"path":...}` payload is used).
+// in which case the service's default PayloadJSON is used; if that is also
+// empty, a `{"synthetic":true,"path":...}` marker is used so the event is
+// distinguishable from real watcher activity).
 func (s Service) EmitSyntheticWithPayload(ctx context.Context, relPath string, typ events.Type, source events.Source, payloadJSON string) (events.Event, error) {
 	if err := validateRelPath(relPath); err != nil {
 		return events.Event{}, err
 	}
 	abs := s.WatchPath + "/" + relPath
 	if payloadJSON == "" {
-		payloadJSON = fmt.Sprintf(`{"synthetic":true,"path":%q}`, relPath)
+		if s.PayloadJSON != "" {
+			payloadJSON = s.PayloadJSON
+		} else {
+			payloadJSON = fmt.Sprintf(`{"synthetic":true,"path":%q}`, relPath)
+		}
 	}
 	e := events.Event{
 		ID:          newID("evt"),
@@ -97,6 +108,9 @@ func (s Service) ScanAndQueue(ctx context.Context, source string) (int, error) {
 	for i := range evs {
 		if evs[i].ProducerID == "" {
 			evs[i].ProducerID = s.ProducerID
+		}
+		if evs[i].PayloadJSON == "" && s.PayloadJSON != "" {
+			evs[i].PayloadJSON = s.PayloadJSON
 		}
 	}
 	for _, e := range evs {

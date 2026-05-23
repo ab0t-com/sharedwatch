@@ -18,7 +18,7 @@ Things that are easy to misread or to get wrong. Skim once at agent boot; revisi
 
 - The default coalesce window is **5 seconds**, keyed on `rel_path` only.
 - Two modifies to the same file within 5 s collapse into **one** visible event. The merged event's id is preserved; the swallowed event's id appears in `coalesced_into`.
-- The current implementation does **not** consider `actor` when coalescing. **If two different agents modify the same file inside the window, their events merge and one actor's attribution wins.** This is a known limitation — see `tickets/` and `sharedwatch-disclosure-attribution-discussion-20260522.md`.
+- Coalesce is **actor-aware** (SW-AGENT-11). Two different actors editing the same path inside the window stay distinct — neither actor's attribution is lost. Same-path same-actor inside the window still merges; same-path empty-actor (legacy single-tenant) also still merges. Two events where one has an actor and the other has none stay distinct (the named event's attribution would otherwise vanish into the untagged one).
 - Coalesce does NOT cross paths. Two different files inside the window stay distinct.
 - Coalesce does NOT cross types. A `file.modified` won't fold into a `file.created` even if they're on the same path and inside the window.
 

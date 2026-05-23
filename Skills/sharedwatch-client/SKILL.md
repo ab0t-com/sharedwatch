@@ -62,39 +62,29 @@ Full CLI surface lives in `references/commands.md`. Copy-paste SQL recipes in `r
 
 ## Identify yourself in events
 
-There is **no first-class `--actor` flag yet** (it is on the roadmap — see `sharedwatch-client-future`). Today, use one of three approaches:
+As of SW-AGENT-7, attribution is first-class via dedicated CLI flags. Three approaches in decreasing convenience:
 
-**a. Run sharedwatch with a stable `producer_id`** so the column is meaningful:
+**a. Pass attribution flags on the root command (preferred for `run`):** every event the watcher and reconciler emit during this lifetime carries the attribution automatically.
 ```bash
-# Sets events.producer_id for all events emitted during this run.
-# The flag is `--producer` (singular), set on the root command before the subcommand.
-sharedwatch --producer "claude-coordinator-1" run
-```
-The default is `<hostname>:<pid>`, which rarely identifies an agent.
-
-**b. Tag synthetic events with structured `payload_json`**:
-```bash
-sharedwatch test emit foo.md --payload '{
-  "schema_version": 1,
-  "actor": "claude-coordinator-1",
-  "session": "sess-2026-05-22-abc",
-  "task": "refactor-auth",
-  "intent": "extracting JWT logic into separate package",
-  "addressee": "human-mike",
-  "tags": ["refactor", "auth"]
-}'
+sharedwatch \
+  --actor claude-coordinator-1 \
+  --session sess-2026-05-23-abc \
+  --task refactor-auth \
+  --intent "split JWT validation" \
+  --tag refactor --tag auth \
+  run
 ```
 
-**c. Announce a real file write** (you wrote the file by other means, then publish):
+**b. Pass attribution flags on `test emit` for a one-off synthetic event** (root values still apply; subcommand values override per-field):
 ```bash
-# 1. Write the file with whatever tool you have
-echo "..." > "$WATCH/auth/login.go"
+sharedwatch test emit specs/widget.md \
+  --actor claude-spec --task new-widget-spec \
+  --addressee claude-code \
+  --tag spec --tag widget
+```
 
-# 2. Wait briefly so the watcher tick picks it up, OR force a reconcile
-sharedwatch reconcile now
-
-# 3. The watcher's auto-detected event will have empty payload_json.
-#    To add attribution, emit a paired synthetic event referencing it:
+**c. Raw `--payload '<json>'` for any unusual case** (mutually exclusive with attribution flags on the same command):
+```bash
 sharedwatch test emit auth/login.go --payload '{
   "schema_version": 1,
   "actor": "claude-coordinator-1",
@@ -104,7 +94,13 @@ sharedwatch test emit auth/login.go --payload '{
 }'
 ```
 
-The canonical `payload_json` v1 keys: `schema_version`, `actor`, `session`, `task`, `intent`, `addressee`, `ref_event_id`, `tags`. Defined in `references/patterns.md`.
+**Optionally also set `--producer <id>`** so the column appears alongside the payload:
+```bash
+sharedwatch --producer "claude-coordinator-1" --actor claude-coordinator-1 run
+```
+The flag is `--producer` (singular). Default is `<hostname>:<pid>`, which rarely identifies an agent.
+
+The canonical `payload_json` v1 keys: `schema_version` (always 1), `actor` (required to populate any others), `actor_kind`, `session`, `task`, `intent`, `addressee`, `ref_event_id`, `tags`. The CLI flag for each is named identically (e.g. `--addressee` → `addressee`, `--ref` → `ref_event_id`). Full schema in `references/patterns.md`.
 
 ## Agentic patterns — compact list
 

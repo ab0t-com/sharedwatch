@@ -58,6 +58,7 @@ sharedwatch [global flags] <command> [command flags] [args]
   digest archive <id>       mark a digest archived
   reconcile now             run reconcile pass immediately
   test emit [relpath]       inject a synthetic event for end-to-end testing
+                            (--payload <json> OR attribution flags below)
   version                   print version and exit
   help                      print this help
 ```
@@ -69,10 +70,38 @@ sharedwatch [global flags] <command> [command flags] [args]
 | `--watch-path <dir>` | `$XDG_DATA_HOME/sharedwatch/watch` | Overrides config and default |
 | `--db <file>` | `$XDG_DATA_HOME/sharedwatch/queue.db` | Overrides config and default |
 | `--data-dir <dir>` | `$XDG_DATA_HOME/sharedwatch` | Reported by `init`; informational |
-| `--ignore <pat>` | (empty) | Repeatable, comma-aware; appended to defaults |
+| `--ignore <pat>` | (empty) | Repeatable, comma-aware; appended to default ignore patterns |
+| `--include <pat>` | (empty) | Repeatable, comma-aware; include-only filter applied before ignores |
+| `--hash on\|off` | `off` | Enable per-file SHA-256 content hashing during snapshot building |
+| `--producer <id>` | `<host>:<pid>` | Stamps `events.producer_id` on emitted events |
 | `--log-format text\|json` | `text` | `json` for log aggregators |
 | `--log-level debug\|info\|warn\|error` | `info` | |
 | `--version` | — | Same as the `version` subcommand |
+
+## Attribution flags (payload_json v1)
+Available on both the root flagset (apply to every event of this invocation, including watcher-detected events during `run`) and on `test emit` (override per-event). Mutually exclusive with `--payload <raw-json>` on `test emit`.
+
+| Flag | payload_json key | Notes |
+|---|---|---|
+| `--actor <id>` | `actor` | Stable id of the writer (required to populate any of the others) |
+| `--actor-kind <k>` | `actor_kind` | `human` / `ai_agent` / `automation` |
+| `--session <id>` | `session` | Logical-run identifier; convention `sess-YYYY-MM-DD-<short>` |
+| `--task <label>` | `task` | Short human-meaningful work label |
+| `--intent <text>` | `intent` | One-sentence reason (quote multi-word values) |
+| `--addressee <id>` | `addressee` | Who the change is FOR (peer agent or human) |
+| `--ref <event-id>` | `ref_event_id` | Causal predecessor event id |
+| `--tag <t>` | `tags[]` | Repeatable; comma-aware |
+
+Examples:
+```bash
+# Attribute every event the daemon emits during this lifetime
+sharedwatch --actor claude-coordinator-1 --session sess-2026-05-23-abc --task refactor-auth run
+
+# Attribute one synthetic event
+sharedwatch test emit specs/widget.md \
+  --actor claude-spec --task new-widget-spec \
+  --addressee claude-code --tag spec --tag widget
+```
 
 ## For agents
 If you're an agent (or anything scripting against sharedwatch), the `digest list / show` flow is for humans. You want the underlying event journal directly:

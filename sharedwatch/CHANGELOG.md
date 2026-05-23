@@ -4,6 +4,28 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — actors registry + heartbeats (SW-AGENT-8)
+- New `actors` table (idempotent migration): `(actor_id PK, label, actor_kind, focus, last_heartbeat, metadata_json)` + index on `last_heartbeat`. Schema visible via `sharedwatch schema --format json`.
+- New top-level subcommand `sharedwatch actor heartbeat <actor-id> [--focus <glob>] [--kind <k>] [--label <l>] [--metadata <json>]`. Upserts the row: a thin heartbeat (just `actor_id`) refreshes `last_heartbeat` while preserving prior metadata; non-empty fields overwrite their slot. Cadence recommendation: ≤ 1/min per actor (cheap but additive).
+- New `status --actors` (and `status --actors --json`) emits the live registry. Each row carries `stale=true` when `last_heartbeat < now - actor_ttl`. The `actors` array is only included when the flag is set, so existing `status --json` consumers are unaffected.
+- New `Config.ActorTTL` (default 5 m), parseable from `config.yaml` under key `actor_ttl: 5m`. Drives both the staleness check and the retention prune.
+- Reconcile loop now also calls `Store.PruneStaleActors(ctx, 2 * ActorTTL)` each pass — recently-stale actors stick around for one diagnostic cycle, then disappear.
+- Soft-warn on actor_kind change between heartbeats (the most common identity-confusion smell). The heartbeat itself is never rejected; the warning is a slog `WARN` line.
+- Tests: `internal/db/actors_test.go` (upsert idempotency, thin-heartbeat metadata preservation, list-ordering, prune, kind-change tolerance).
+
+### Fixed — actor-aware coalesce (SW-AGENT-11)
+- **Cross-actor events on the same path no longer silently merge.** The coalesce key is now `(rel_path, actor)` where `actor` is parsed from `payload_json.actor` via the new `events.ExtractActor` helper. Two different actors editing the same file inside the 5 s window produce two distinct events; same-actor events still coalesce; legacy empty-actor events still coalesce with other empty-actor events. Fixes the silent attribution loss exposed by dogfood scenario 17 (`test_dogfood.md`).
+- New `Store.FindRecentPendingByRelPathAndActor(ctx, relPath, actor, since)` returns the most recent pending event on `relPath` whose actor matches. Implementation fetches a bounded candidate window (LIMIT 16) and filters actor in Go via `events.ExtractActor` — avoids any dependency on SQLite's JSON1 extension for a hot-path query. `Store.FindRecentPendingByRelPath` is retained for callers that don't need actor scoping.
+- `events.ShouldCoalesce` documents and enforces the actor-equality contract.
+- Regression test `TestCoalesceScopedToActor` covers six cases: same-actor-merge, cross-actor-distinct, empty+empty-merge, empty+named-distinct, outside-window-distinct, three-actors-interleaved.
+
+### Added — agent-fit follow-up (SW-AGENT-7 — payload v1 attribution)
+- **`payload_json` v1 schema + helpers (new `internal/events/payload.go`):** canonical `PayloadV1` struct with fields `actor`, `actor_kind`, `session`, `task`, `intent`, `addressee`, `ref_event_id`, `tags`. `BuildPayloadV1` always sets `schema_version: 1`, omits empty optional fields, and returns `""` for an empty struct so the historical "no payload" behaviour is preserved when attribution isn't requested. Companion `ExtractActor(payloadJSON)` returns the actor field tolerantly (unknown keys ignored, forward-version payloads still readable).
+- **First-class attribution flags:** `--actor`, `--actor-kind`, `--session`, `--task`, `--intent`, `--addressee`, `--ref` (sets `ref_event_id`), `--tag` (repeatable, comma-aware). Available on both the root flagset and on `test emit`; subcommand values override root values per-field, non-empty wins.
+- **Mutual exclusion:** `--payload '<raw-json>'` and the attribution flags refuse to be mixed on `test emit`; the user picks one form.
+- **Watcher + reconciler propagation:** when any attribution flag is set on the root flagset, every event emitted by the watcher diff loop AND the reconciler's drift-recovery / cold-start path stamps the v1 payload onto events that don't already carry one. Plumbed via new `Config.PayloadJSON` → `watcher.Service.PayloadJSON` / `reconcile.Service.PayloadJSON`. Empty `PayloadJSON` is strictly legacy behaviour (existing single-tenant callers unaffected).
+- **Tests:** `internal/events/payload_test.go` (build/empty/round-trip/schema-version-coercion/ExtractActor table). `internal/app/attribution_test.go` (watcher path, reconciler cold-start path, empty-attribution legacy-behaviour preservation).
+
 ### Added — agent-fit follow-up (SW-AGENT-2, 4, 5, 6 + small fixes)
 - **Producer-supplied payload (SW-AGENT-2):** `sharedwatch test emit <relpath> --payload '<json>'` accepts arbitrary JSON object payload; stored in `events.payload_json`. Validated as JSON before insert.
 - **Payload filter (SW-AGENT-2):** `events list --payload-key K --payload-value V` post-filters by parsing `payload_json` as an object and matching `obj[K] == V`.

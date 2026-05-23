@@ -42,6 +42,8 @@ func main() {
 	root.Var(&extraIncludes, "include", "include-only pattern (repeatable; empty = include all)")
 	hashFlag := root.String("hash", "", "enable content hashing: on|off (default off)")
 	producerOverride := root.String("producer", "", "override producer_id stamped on emitted events")
+	var rootAttr attrFlags
+	bindAttrFlags(root, &rootAttr, "applied to every event emitted during this invocation")
 	showVersion := root.Bool("version", false, "print version and exit")
 	root.Usage = func() { usage(root) }
 
@@ -76,7 +78,7 @@ func main() {
 	known := map[string]bool{
 		"run": true, "status": true, "mode": true, "digest": true,
 		"reconcile": true, "test": true, "consume": true, "init": true,
-		"events": true, "sql": true, "schema": true,
+		"events": true, "sql": true, "schema": true, "actor": true,
 	}
 	if !known[rest[0]] {
 		fmt.Fprintln(os.Stderr, "unknown subcommand:", rest[0])
@@ -118,6 +120,9 @@ func main() {
 	if *producerOverride != "" {
 		cfg.ProducerID = *producerOverride
 	}
+	if !rootAttr.isEmpty() {
+		cfg.PayloadJSON = events.BuildPayloadV1(rootAttr.toPayload())
+	}
 
 	logger, err := buildLogger(*logFormat, *logLevel)
 	if err != nil {
@@ -145,7 +150,7 @@ func main() {
 	case "reconcile":
 		handleReconcile(ctx, a, rest[1:])
 	case "test":
-		handleTest(ctx, a, rest[1:])
+		handleTest(ctx, a, rest[1:], rootAttr)
 	case "consume":
 		handleConsume(ctx, a)
 	case "init":
@@ -156,6 +161,8 @@ func main() {
 		handleSQL(ctx, a, rest[1:])
 	case "schema":
 		handleSchema(ctx, a, rest[1:])
+	case "actor":
+		handleActor(ctx, a, rest[1:])
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand:", rest[0])
 		usage(root)
@@ -166,11 +173,19 @@ func main() {
 func handleStatus(ctx context.Context, a *app.App, args []string) {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "emit status as JSON")
+	showActors := fs.Bool("actors", false, "include the actors[] registry array")
 	_ = fs.Parse(args)
 	if *asJSON {
 		snap, err := a.StatusSnapshot(ctx)
 		if err != nil {
 			fatal(err)
+		}
+		if *showActors {
+			actors, err := a.ActorsView(ctx)
+			if err != nil {
+				fatal(err)
+			}
+			snap.Actors = actors
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -184,6 +199,33 @@ func handleStatus(ctx context.Context, a *app.App, args []string) {
 		fatal(err)
 	}
 	fmt.Println(out)
+	if *showActors {
+		actors, err := a.ActorsView(ctx)
+		if err != nil {
+			fatal(err)
+		}
+		if len(actors) == 0 {
+			fmt.Println("actors: (none registered)")
+			return
+		}
+		fmt.Println("actors:")
+		for _, ar := range actors {
+			staleMark := ""
+			if ar.Stale {
+				staleMark = " STALE"
+			}
+			fmt.Printf("  %s  kind=%s  focus=%s  last_heartbeat=%s%s\n",
+				ar.ActorID, defaultDash(ar.ActorKind), defaultDash(ar.Focus),
+				ar.LastHeartbeat.UTC().Format(time.RFC3339), staleMark)
+		}
+	}
+}
+
+func defaultDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func handleMode(ctx context.Context, a *app.App, args []string) {
@@ -276,12 +318,14 @@ func handleReconcile(ctx context.Context, a *app.App, args []string) {
 	fmt.Printf("reconcile checkpoint recorded recovery_events=%d\n", count)
 }
 
-func handleTest(ctx context.Context, a *app.App, args []string) {
+func handleTest(ctx context.Context, a *app.App, args []string, rootAttr attrFlags) {
 	if len(args) < 1 || args[0] != "emit" {
-		fatal(fmt.Errorf("usage: sharedwatch test emit [relpath] [--payload <json>]"))
+		fatal(fmt.Errorf("usage: sharedwatch test emit [relpath] [--payload <json> | --actor X --session Y --task Z ...]"))
 	}
 	fs := flag.NewFlagSet("test emit", flag.ExitOnError)
-	payload := fs.String("payload", "", "JSON payload to attach (must be a valid JSON object)")
+	payload := fs.String("payload", "", "raw JSON payload (mutually exclusive with --actor / --session / ...)")
+	var subAttr attrFlags
+	bindAttrFlags(fs, &subAttr, "overrides any root-level attribution for this emit")
 	rest := args[1:]
 	// Pre-extract a non-flag relpath if it's the first positional.
 	rel := "test-event.md"
@@ -291,13 +335,23 @@ func handleTest(ctx context.Context, a *app.App, args []string) {
 		parseFrom = rest[1:]
 	}
 	_ = fs.Parse(parseFrom)
-	if *payload != "" {
+
+	merged := rootAttr.merge(subAttr)
+	rawPayload := strings.TrimSpace(*payload)
+	if rawPayload != "" && !merged.isEmpty() {
+		fatal(fmt.Errorf("--payload is mutually exclusive with --actor / --session / --task / --intent / --addressee / --ref / --tag"))
+	}
+	if rawPayload != "" {
 		var probe map[string]any
-		if err := json.Unmarshal([]byte(*payload), &probe); err != nil {
+		if err := json.Unmarshal([]byte(rawPayload), &probe); err != nil {
 			fatal(fmt.Errorf("--payload must be a JSON object: %w", err))
 		}
 	}
-	e, err := a.TestEmitWithPayload(ctx, rel, *payload)
+	finalPayload := rawPayload
+	if finalPayload == "" && !merged.isEmpty() {
+		finalPayload = events.BuildPayloadV1(merged.toPayload())
+	}
+	e, err := a.TestEmitWithPayload(ctx, rel, finalPayload)
 	if err != nil {
 		fatal(err)
 	}
@@ -596,6 +650,52 @@ func handleSQL(ctx context.Context, a *app.App, args []string) {
 	}
 }
 
+func handleActor(ctx context.Context, a *app.App, args []string) {
+	if len(args) < 1 {
+		fatal(fmt.Errorf("usage: sharedwatch actor heartbeat <actor-id> [--focus <glob>] [--kind <k>] [--label <l>] [--metadata <json>]"))
+	}
+	switch args[0] {
+	case "heartbeat":
+		handleActorHeartbeat(ctx, a, args[1:])
+	default:
+		fatal(fmt.Errorf("unknown actor subcommand: %s (expected: heartbeat)", args[0]))
+	}
+}
+
+func handleActorHeartbeat(ctx context.Context, a *app.App, args []string) {
+	fs := flag.NewFlagSet("actor heartbeat", flag.ExitOnError)
+	focus := fs.String("focus", "", "path-glob describing what this actor is focused on")
+	kind := fs.String("kind", "", "human | ai_agent | automation")
+	label := fs.String("label", "", "human-readable display label")
+	metadata := fs.String("metadata", "", "free-form JSON object stored alongside the actor")
+	rest := args
+	actorID := ""
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		actorID = rest[0]
+		rest = rest[1:]
+	}
+	_ = fs.Parse(rest)
+	if actorID == "" {
+		fatal(fmt.Errorf("usage: sharedwatch actor heartbeat <actor-id> [flags]"))
+	}
+	if *metadata != "" {
+		var probe map[string]any
+		if err := json.Unmarshal([]byte(*metadata), &probe); err != nil {
+			fatal(fmt.Errorf("--metadata must be a JSON object: %w", err))
+		}
+	}
+	if err := a.Store.UpsertActorHeartbeat(ctx, db.ActorRecord{
+		ActorID:      actorID,
+		Label:        *label,
+		ActorKind:    *kind,
+		Focus:        *focus,
+		MetadataJSON: *metadata,
+	}); err != nil {
+		fatal(err)
+	}
+	fmt.Printf("heartbeat %s\n", actorID)
+}
+
 func handleSchema(ctx context.Context, a *app.App, args []string) {
 	fs := flag.NewFlagSet("schema", flag.ExitOnError)
 	formatFlag := fs.String("format", "text", "text|json")
@@ -746,8 +846,19 @@ COMMANDS
   sql <sql>|-|--file path   run a SQL query (SELECT-only by default; --write to allow mutations)
   schema [<table>]          print live DDL from the DB (--format text|json)
   test emit [relpath]       inject a synthetic event for end-to-end testing
+                            (--payload <json> OR attribution flags below)
   version                   print version and exit
   help                      print this help
+
+ATTRIBUTION FLAGS (root or test-emit; populate events.payload_json v1)
+  --actor <id>              stable id of the writer (required to use any other)
+  --actor-kind <k>          human | ai_agent | automation
+  --session <id>            logical-run identifier; group related events
+  --task <label>            short human-meaningful work label
+  --intent <text>           one-sentence reason
+  --addressee <id>          who the change is FOR (peer or human)
+  --ref <event-id>          causal predecessor event id (ref_event_id)
+  --tag <t>                 payload tag (repeatable, comma-aware)
 
 GLOBAL FLAGS`)
 	root.PrintDefaults()
@@ -761,6 +872,89 @@ EXAMPLES
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "error:", err)
 	os.Exit(1)
+}
+
+// attrFlags bundles the v1 attribution flags (`--actor`, `--session`, ...) so
+// they can be registered on multiple flagsets (root + subcommand) and merged
+// with subcommand-wins semantics.
+type attrFlags struct {
+	actor      string
+	actorKind  string
+	session    string
+	task       string
+	intent     string
+	addressee  string
+	refEventID string
+	tags       csvList
+}
+
+func (a *attrFlags) isEmpty() bool {
+	return a.actor == "" && a.actorKind == "" && a.session == "" && a.task == "" &&
+		a.intent == "" && a.addressee == "" && a.refEventID == "" && len(a.tags) == 0
+}
+
+// merge layers `over` on top of `a`. Non-empty fields in `over` win; empty
+// fields in `over` inherit from `a`. For tags: if `over` has any tags they
+// replace `a`'s tags (no implicit append, to keep the rule predictable).
+func (a attrFlags) merge(over attrFlags) attrFlags {
+	out := a
+	if over.actor != "" {
+		out.actor = over.actor
+	}
+	if over.actorKind != "" {
+		out.actorKind = over.actorKind
+	}
+	if over.session != "" {
+		out.session = over.session
+	}
+	if over.task != "" {
+		out.task = over.task
+	}
+	if over.intent != "" {
+		out.intent = over.intent
+	}
+	if over.addressee != "" {
+		out.addressee = over.addressee
+	}
+	if over.refEventID != "" {
+		out.refEventID = over.refEventID
+	}
+	if len(over.tags) > 0 {
+		out.tags = append([]string(nil), over.tags...)
+	}
+	return out
+}
+
+func (a attrFlags) toPayload() events.PayloadV1 {
+	return events.PayloadV1{
+		Actor:      a.actor,
+		ActorKind:  a.actorKind,
+		Session:    a.session,
+		Task:       a.task,
+		Intent:     a.intent,
+		Addressee:  a.addressee,
+		RefEventID: a.refEventID,
+		Tags:       append([]string(nil), a.tags...),
+	}
+}
+
+// bindAttrFlags registers --actor / --actor-kind / --session / --task /
+// --intent / --addressee / --ref / --tag on fs, writing into dest. The scope
+// string is appended to each --help line so users can tell root-level vs
+// subcommand-level definitions apart.
+func bindAttrFlags(fs *flag.FlagSet, dest *attrFlags, scope string) {
+	suffix := ""
+	if scope != "" {
+		suffix = " (" + scope + ")"
+	}
+	fs.StringVar(&dest.actor, "actor", "", "payload_json.actor — stable id for the writer"+suffix)
+	fs.StringVar(&dest.actorKind, "actor-kind", "", "payload_json.actor_kind — human|ai_agent|automation"+suffix)
+	fs.StringVar(&dest.session, "session", "", "payload_json.session — logical run id"+suffix)
+	fs.StringVar(&dest.task, "task", "", "payload_json.task — short human-meaningful work label"+suffix)
+	fs.StringVar(&dest.intent, "intent", "", "payload_json.intent — one-sentence reason"+suffix)
+	fs.StringVar(&dest.addressee, "addressee", "", "payload_json.addressee — who the change is FOR"+suffix)
+	fs.StringVar(&dest.refEventID, "ref", "", "payload_json.ref_event_id — causal predecessor event id"+suffix)
+	fs.Var(&dest.tags, "tag", "payload_json.tags entry (repeatable; comma-aware)"+suffix)
 }
 
 // csvList implements flag.Value for a repeatable string slice that also

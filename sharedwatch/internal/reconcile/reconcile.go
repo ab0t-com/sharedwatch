@@ -23,6 +23,13 @@ type Service struct {
 	HashMaxSize     int64
 	RetentionDays   int
 	ProducerID      string
+	// PayloadJSON applied to events emitted by the reconciler (recovery events,
+	// cold-start creates) when the event lacks its own payload. Mirrors
+	// watcher.Service.PayloadJSON.
+	PayloadJSON string
+	// ActorTTL drives the per-pass actor-registry prune. Stale rows past
+	// 2× ActorTTL are deleted. Zero disables the prune (kept for tests).
+	ActorTTL time.Duration
 }
 
 func (s Service) RunNow(ctx context.Context) (int, error) {
@@ -66,6 +73,9 @@ func (s Service) RunNow(ctx context.Context) (int, error) {
 		if evs[i].ProducerID == "" {
 			evs[i].ProducerID = s.ProducerID
 		}
+		if evs[i].PayloadJSON == "" && s.PayloadJSON != "" {
+			evs[i].PayloadJSON = s.PayloadJSON
+		}
 	}
 	for _, e := range evs {
 		if err := s.Store.InsertOrCoalesceEvent(ctx, e, s.Window); err != nil {
@@ -98,5 +108,10 @@ func (s Service) RunNow(ctx context.Context) (int, error) {
 	_, _ = s.Store.PruneOldProcessedEvents(ctx, retention)
 	_, _ = s.Store.PruneArchivedDigests(ctx, retention)
 	_, _ = s.Store.PruneOldSnapshots(ctx, watcher.SnapshotSourceReconciler, 5)
+	if s.ActorTTL > 0 {
+		// 2× TTL keeps recently-stale actors around for one diagnostic cycle
+		// before they disappear from `status --actors`.
+		_, _ = s.Store.PruneStaleActors(ctx, 2*s.ActorTTL)
+	}
 	return count, nil
 }

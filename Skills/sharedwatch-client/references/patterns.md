@@ -43,6 +43,31 @@ When you emit an event (via `test emit --payload`) or want peers to find your wo
 
 Unknown keys are allowed but ignored. Validation is soft (warn, never reject).
 
+Build the payload either with the dedicated CLI flags (preferred, since SW-AGENT-7 shipped) or by hand-rolling JSON via `--payload`:
+
+```bash
+# Preferred — first-class flags on root or `test emit`. Mutually exclusive
+# with `--payload` on the same command.
+sharedwatch test emit foo.md \
+  --actor claude-coordinator-1 \
+  --actor-kind ai_agent \
+  --session sess-2026-05-23-abc \
+  --task refactor-auth \
+  --intent "split JWT validation" \
+  --addressee human-mike \
+  --ref evt_a1b2 \
+  --tag refactor --tag auth
+
+# Legacy — hand-built JSON. Still supported; useful when you need a payload
+# key that isn't covered by flags.
+sharedwatch test emit foo.md --payload '{
+  "schema_version": 1,
+  "actor": "claude-coordinator-1",
+  "session": "sess-2026-05-23-abc",
+  "tags": ["refactor", "auth"]
+}'
+```
+
 Query attribution with `--payload-key`/`--payload-value`:
 
 ```bash
@@ -132,24 +157,24 @@ sharedwatch events list --path-glob 'auth/login.go' --since 1h --format jsonl \
 
 **When:** you wrote a file and want peer agents to find it with full attribution.
 
-**Steps:**
-1. Write the file (any tool).
-2. Immediately emit a paired synthetic event referencing yourself:
+**Steps (since SW-AGENT-7):**
+1. If you control the `run` invocation, launch it with attribution on the root flagset — the watcher will stamp your attribution onto every auto-detected event during this lifetime:
    ```bash
-   sharedwatch test emit auth/login.go --payload '{
-     "schema_version":1,
-     "actor":"claude-me-1",
-     "session":"sess-abc",
-     "task":"refactor-auth",
-     "intent":"split JWT validation"
-   }'
+   sharedwatch --actor claude-me-1 --session sess-abc --task refactor-auth run &
    ```
-3. Verify the event is in the journal:
+2. Write the file (any tool). The next watcher tick (~2 s) picks it up with your attribution attached.
+3. If you do NOT control `run`, emit a paired synthetic event using flags:
+   ```bash
+   sharedwatch test emit auth/login.go \
+     --actor claude-me-1 --session sess-abc --task refactor-auth \
+     --intent "split JWT validation"
+   ```
+4. Verify the event is in the journal:
    ```bash
    sharedwatch events list --path-glob 'auth/login.go' --since 1m --limit 1 --format jsonl
    ```
 
-**Why the paired synthetic event?** The watcher's auto-detected event has empty `payload_json`. The synthetic event carries attribution. Filtering by `--payload-key actor` returns your event (the watcher's untagged event is left behind as an unattributed duplicate — that is acceptable noise today; will be fixed when first-class `--actor` lands).
+**Why the paired synthetic event when you do NOT control `run`?** The watcher's auto-detected event will carry whatever attribution the `run` was launched with (none, if defaulted). The synthetic event carries yours. Filter by `--payload-key actor` to find your event; the watcher's same-path event may coalesce with yours within the 5 s window — and once SW-AGENT-11 (actor-aware coalesce) lands, coalesce no longer crosses actor boundaries so both stay distinct.
 
 ## 6. PATTERN: did-peer-respond
 
@@ -186,15 +211,13 @@ sharedwatch status --json
 # 2. Write the spec file
 echo "Widget: red/blue modes" > "$WATCH/specs/widget.md"
 
-# 3. PATTERN: publish-and-attribute
-sharedwatch test emit specs/widget.md --payload "{
-  \"schema_version\":1,
-  \"actor\":\"$ACTOR\",
-  \"session\":\"$SESSION\",
-  \"task\":\"new-widget-spec\",
-  \"addressee\":\"claude-code\",
-  \"tags\":[\"spec\",\"widget\"]
-}"
+# 3. PATTERN: publish-and-attribute (uses SW-AGENT-7 flags)
+sharedwatch test emit specs/widget.md \
+  --actor "$ACTOR" \
+  --session "$SESSION" \
+  --task new-widget-spec \
+  --addressee claude-code \
+  --tag spec --tag widget
 
 # 4. capture event id
 SPEC_EVT=$(sharedwatch events list --path-glob 'specs/widget.md' --limit 1 --format json | jq -r '.rows[0].id')
@@ -211,13 +234,11 @@ sharedwatch events list --path-glob 'specs/**' --since 1h \
 echo "// implements per $SPEC_EVT" > "$WATCH/code/widget.go"
 
 # 7. PATTERN: publish-and-attribute with ref_event_id
-sharedwatch test emit code/widget.go --payload "{
-  \"schema_version\":1,
-  \"actor\":\"$ACTOR\",
-  \"session\":\"$SESSION\",
-  \"task\":\"implement-widget\",
-  \"ref_event_id\":\"$SPEC_EVT\"
-}"
+sharedwatch test emit code/widget.go \
+  --actor "$ACTOR" \
+  --session "$SESSION" \
+  --task implement-widget \
+  --ref "$SPEC_EVT"
 
 # Back at claude-spec:
 # 8. PATTERN: did-peer-respond

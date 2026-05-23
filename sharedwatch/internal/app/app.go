@@ -51,7 +51,8 @@ func NewWithLogger(ctx context.Context, cfg config.Config, logger *slog.Logger) 
 			CoalesceWindow: cfg.CoalesceWindow,
 			IgnorePatterns: cfg.IgnorePatterns, IncludePatterns: cfg.IncludePatterns,
 			HashEnabled: cfg.HashEnabled, HashMaxSize: cfg.HashMaxSize,
-			ProducerID: cfg.ProducerID,
+			ProducerID:  cfg.ProducerID,
+			PayloadJSON: cfg.PayloadJSON,
 		},
 		Consumer: consumer.Service{Store: store},
 		Reconcile: reconcile.Service{
@@ -61,6 +62,8 @@ func NewWithLogger(ctx context.Context, cfg config.Config, logger *slog.Logger) 
 			HashEnabled: cfg.HashEnabled, HashMaxSize: cfg.HashMaxSize,
 			RetentionDays: cfg.RetentionDays,
 			ProducerID:    cfg.ProducerID,
+			PayloadJSON:   cfg.PayloadJSON,
+			ActorTTL:      cfg.ActorTTL,
 		},
 		Logger: logger,
 	}, nil
@@ -80,6 +83,47 @@ type StatusSnapshot struct {
 	LastEventAt      *time.Time `json:"last_event_at,omitempty"`
 	LastConsumerRun  *time.Time `json:"last_consumer_run,omitempty"`
 	LastReconcileRun *time.Time `json:"last_reconcile_run,omitempty"`
+	// Actors is populated only when the caller asks for it (via `status
+	// --actors`). The omitempty keeps the existing JSON shape stable for
+	// callers that don't pass the flag.
+	Actors []ActorView `json:"actors,omitempty"`
+}
+
+// ActorView is the status-time projection of an actor registry row. Stale is
+// derived against the running config's ActorTTL.
+type ActorView struct {
+	ActorID       string    `json:"actor_id"`
+	Label         string    `json:"label,omitempty"`
+	ActorKind     string    `json:"actor_kind,omitempty"`
+	Focus         string    `json:"focus,omitempty"`
+	LastHeartbeat time.Time `json:"last_heartbeat"`
+	Stale         bool      `json:"stale"`
+}
+
+// ActorsView returns the current actors registry projected for status output,
+// with Stale computed against Cfg.ActorTTL.
+func (a *App) ActorsView(ctx context.Context) ([]ActorView, error) {
+	rows, err := a.Store.ListActors(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ttl := a.Cfg.ActorTTL
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	threshold := time.Now().UTC().Add(-ttl)
+	out := make([]ActorView, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ActorView{
+			ActorID:       r.ActorID,
+			Label:         r.Label,
+			ActorKind:     r.ActorKind,
+			Focus:         r.Focus,
+			LastHeartbeat: r.LastHeartbeat,
+			Stale:         r.LastHeartbeat.Before(threshold),
+		})
+	}
+	return out, nil
 }
 
 func (a *App) StatusSnapshot(ctx context.Context) (StatusSnapshot, error) {

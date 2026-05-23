@@ -2,6 +2,18 @@ package events
 
 import "time"
 
+// ShouldCoalesce decides whether `incoming` should be folded into `existing`
+// instead of becoming its own row. The contract:
+//
+//   - Same rel_path required.
+//   - Existing must still be `pending` (not claimed by the consumer).
+//   - Inside the coalesce window measured against existing.Timestamp.
+//   - Same actor required (parsed from payload_json.actor). Two empty-actor
+//     events still coalesce — preserves single-tenant behaviour. Two non-empty
+//     actors with different values do NOT coalesce — the load-bearing fix
+//     from SW-AGENT-11 / dogfood scenario 17.
+//   - Only create→modify or modify→modify pairs (creates never absorb a
+//     subsequent delete, etc.).
 func ShouldCoalesce(existing Event, incoming Event, window time.Duration) bool {
 	if existing.RelPath == "" || incoming.RelPath == "" {
 		return false
@@ -13,6 +25,9 @@ func ShouldCoalesce(existing Event, incoming Event, window time.Duration) bool {
 		return false
 	}
 	if incoming.Timestamp.Sub(existing.Timestamp) > window {
+		return false
+	}
+	if ExtractActor(existing.PayloadJSON) != ExtractActor(incoming.PayloadJSON) {
 		return false
 	}
 
