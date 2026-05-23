@@ -82,7 +82,7 @@ Status line near the top of any artifact: `Status: draft|proposed|approved|block
 
 ## Shared-folder collab policy
 
-The repo root doubles as the team's shared folder (TEAM.md, ticket/, top-level reports). The policy from TEAM.md:
+The repo root doubles as the team's shared folder (`docs/TEAM.md`, `tickets/`, `docs/reports/`). The policy from `docs/TEAM.md`:
 
 - Files in this shared folder are approved for free internal team use.
 - Shared-folder content may be read and written by team members for collaboration.
@@ -99,17 +99,17 @@ Standard flow:
 2. **Branch** from `main`. (The current default branch is `master` in some forks — confirm.)
 3. **Implement** with tests. `make ci` should pass locally:
    ```bash
-   cd sharedwatch && make ci   # = gofmt -l, go vet, go test ./...
+   cd src && make ci   # = gofmt -l, go vet, go test ./...
    ```
 4. **Smoke test** the user-visible flow:
    ```bash
    make smoke                  # builds + runs the README quickstart end-to-end
    ```
 5. **Update docs** if behavior changed:
-   - `README.md` if the Quickstart or command table changes
-   - `CHANGELOG.md` under `[Unreleased]`
-   - `docs/SCHEMA_CONTRACTS.md` if the DB schema changes
-   - `docs/APPLICATION_FLOW.md` or `docs/STATE_MODEL.md` for state transition changes
+   - `src/README.md` if the Quickstart or command table changes
+   - `src/CHANGELOG.md` under `[Unreleased]`
+   - `src/docs/SCHEMA_CONTRACTS.md` if the DB schema changes
+   - `src/docs/APPLICATION_FLOW.md` or `src/docs/STATE_MODEL.md` for state transition changes
 6. **Open a PR.** Reference the ticket id (`SW-AGENT-N`) in the title.
 7. **Mike approves** or asks for changes.
 
@@ -121,12 +121,13 @@ Standard flow:
 | Engineering style details, test patterns | `references/conventions.md` |
 | Team roles, growth plan, escalation | `references/team.md` |
 | Currently open tickets | `references/tickets.md` |
-| Original product spec | `shared-drive-watcher-spec.md` (root) |
-| Application flow diagram | `sharedwatch/docs/APPLICATION_FLOW.md` |
-| State model | `sharedwatch/docs/STATE_MODEL.md` |
-| Schema contracts | `sharedwatch/docs/SCHEMA_CONTRACTS.md` |
-| Design intent ("why is it like this?") | `sharedwatch/docs/JOHN_HANDOFF.md` |
-| Operating guide | `sharedwatch/docs/OPERATOR_GUIDE.md` |
+| Original product spec | `docs/specs/shared-drive-watcher-spec.md` |
+| All design / report / spec / agent docs | `docs/` (start at `docs/README.md`) |
+| Application flow diagram | `src/docs/APPLICATION_FLOW.md` |
+| State model | `src/docs/STATE_MODEL.md` |
+| Schema contracts | `src/docs/SCHEMA_CONTRACTS.md` |
+| Design intent ("why is it like this?") | `src/docs/JOHN_HANDOFF.md` |
+| Operating guide | `src/docs/OPERATOR_GUIDE.md` |
 | Recent discussion docs | top level: `sharedwatch-*-discussion-*.md`, `sharedwatch-*-report-*.md` |
 
 ## What this project is NOT

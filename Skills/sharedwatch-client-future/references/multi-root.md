@@ -97,7 +97,7 @@ The `watch_root` column appears in `events list` output iff:
 
 Same rule for `digest list`. The point: single-root invocations look identical to today; multi-root invocations reveal the column when it's load-bearing.
 
-Default `--fields` for multi-root scope: `id, type, rel_path, watch_root, actor, created_at`. The `actor` field is promoted from `payload_json.actor` once the attribution-v1 migration lands. The timestamp column is exposed as `created_at` by the CLI (the same value path as in the current-state surface; see `sharedwatch-client/references/commands.md` for the `created_at` vs `observed_at` quirk).
+Default `--fields` for multi-root scope: `id, type, rel_path, watch_root, producer_id, created_at`. As of v0.8.0 there is no promoted `actor` column — query attribution through `--payload-key actor --payload-value <x>` or `json_extract(payload_json,'$.actor')` in SQL. The timestamp column is exposed as `created_at` by the CLI (see `sharedwatch-client/references/commands.md` for the `created_at` vs `observed_at` quirk).
 
 ## 7. Status and roots discovery
 
@@ -145,7 +145,7 @@ You don't have to think about these as an agent — they Just Work. They are lis
 ## What's NOT supported (and won't be)
 
 - Per-root mode (`active` for one root, `passive` for another). Mode is a property of the consumer's attention; the consumer reads from one DB.
-- Per-root retention or ignore patterns (yet — will land if/when a noisy-neighbor case emerges).
+- Per-root retention or ignore patterns (not in v0.8.0; planned only if/when a noisy-neighbor case emerges).
 - Hot reconfig of roots at runtime. Restart with new config.
 - Cross-root rename pairing. Two files with matching size/mtime in different roots are two events, not a rename.
 - Cross-host or networked queues. Out of scope for v1.

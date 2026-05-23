@@ -13,7 +13,7 @@ How the team works today, what role-kinds exist, and how the model generalizes a
 
 ## 1. Today's team (concrete)
 
-Source: `TEAM.md` at the repo root. As of 2026-05-22:
+Source: `docs/TEAM.md`. As of 2026-05-22:
 
 - **Mike** — owner; final decision-maker; can assign work, priorities, approval scope.
 - **Sarah** — structure, execution, documentation, coordination, follow-through. Strong fit for task breakdowns, operating notes, decisions, checklists, making work concrete.
@@ -47,7 +47,7 @@ This flow is not bureaucratic — it's a default. Simple changes skip steps; com
 
 ## 4. Shared-folder policy
 
-The repo root is the team's working surface. From `TEAM.md`:
+The repo root is the team's working surface (with docs in `docs/`). From `docs/TEAM.md`:
 
 - Files in the shared folder are approved for free internal team use.
 - Shared-folder content may be read and written by team members for collaboration.

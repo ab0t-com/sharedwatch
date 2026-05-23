@@ -1,6 +1,6 @@
-# Migrating agents from the current-state skill
+# Migrating agents from the pre-v0.8 skill to v0.8.0
 
-What to change in an agent prompt / orchestration that targets the `sharedwatch-client` skill once the future-state features land.
+What to change in an agent prompt / orchestration that targets the legacy `sharedwatch-client` skill. Everything in `sharedwatch-client-future` shipped in v0.8.0; this doc is the migration recipe for orchestrations written before that release.
 
 ## Contents
 1. Detect the available feature set first
@@ -27,7 +27,7 @@ Use these as feature gates. Falling back gracefully is part of being a good citi
 
 ## 2. Mechanical replacements
 
-| Old (current-state) | New (future-state) | Notes |
+| Old (pre-v0.8) | New (v0.8.0+) | Notes |
 |---|---|---|
 | `sharedwatch sql "SELECT type, COUNT(*) FROM events WHERE ... GROUP BY type"` | `sharedwatch overview --format json` | overview returns the same data plus more, in one call |
 | `sharedwatch sql "SELECT rel_path, COUNT(*) ... GROUP BY rel_path"` | `sharedwatch events stats --root <X> --format json` then read `top_paths` | scope-required forces the agent to pick |
@@ -122,7 +122,7 @@ Code that destructures `status --json` with strict schemas will need to add tole
 If you maintain an agent that must work against multiple sharedwatch versions, write the agent like this:
 
 1. **Detect features at startup** (§1).
-2. **Use the future-state primitives when available**, falling back to current-state forms otherwise.
+2. **Use the v0.8.0 primitives when available**, falling back to pre-v0.8 forms otherwise.
 3. **Always set `--actor`** (via flag if supported, via `--payload` JSON otherwise). It's the one universally-meaningful field.
 4. **Always use cursors with the `<actor>-<task>[-<root>]` naming convention** even if you're in single-root today. Future-proofs.
 5. **Tolerate unknown keys in JSON output.** Never destructure with strict schemas.

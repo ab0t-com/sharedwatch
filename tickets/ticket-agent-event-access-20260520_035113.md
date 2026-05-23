@@ -13,9 +13,9 @@
 
 Three prior deliverables in this directory establish the why:
 
-- `sharedwatch-engineering-report-20260520_015418.md` — structural map, bug list, rubric (27/60 baseline before this session's work).
-- `sharedwatch-pmm-report-20260520_015418.md` — positioning, users, launch checklist.
-- `sharedwatch-agent-fit-20260520_034245.md` — **the analysis that motivated this ticket**. Read §3, §4 (gaps 1, 2), §6, §8.
+- `../docs/reports/engineering-report-20260520.md` — structural map, bug list, rubric (27/60 baseline before this session's work).
+- `../docs/reports/pmm-report-20260520.md` — positioning, users, launch checklist.
+- `../docs/agent/agent-fit-20260520.md` — **the analysis that motivated this ticket**. Read §3, §4 (gaps 1, 2), §6, §8.
 
 And one work record:
 
@@ -243,9 +243,9 @@ Plus: every existing test still passes; `gofmt -l .` clean; `go vet ./...` clean
 
 ## 10. References
 
-- `sharedwatch-agent-fit-20260520_034245.md` §3, §4 (gaps 1+2), §6, §8 — motivation, what NOT to add.
-- `sharedwatch-engineering-report-20260520_015418.md` §10 — interface assessment (CLI gaps).
-- `sharedwatch-pmm-report-20260520_015418.md` §4 — positioning (this ticket shifts the positioning subtly; README update required).
+- `../docs/agent/agent-fit-20260520.md` §3, §4 (gaps 1+2), §6, §8 — motivation, what NOT to add.
+- `../docs/reports/engineering-report-20260520.md` §10 — interface assessment (CLI gaps).
+- `../docs/reports/pmm-report-20260520.md` §4 — positioning (this ticket shifts the positioning subtly; README update required).
 - `tasklist_20260520_022339.md` — prior open-up work; this ticket is the next session's input.
 - `sharedwatch/CHANGELOG.md` — current `[Unreleased]` block.
 - `sharedwatch/internal/db/db.go` — existing schema + indexes; this ticket reuses both.

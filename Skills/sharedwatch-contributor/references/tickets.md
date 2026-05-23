@@ -41,8 +41,8 @@ Shipped:
 - `--payload-key`/`--payload-value` post-fetch filter on `payload_json`
 
 Cross-refs:
-- `sharedwatch-agent-fit-20260520_034245.md` — original motivation
-- `sharedwatch-engineering-report-20260520_015418.md` §10 — interface gap analysis
+- `docs/agent/agent-fit-20260520.md` — original motivation
+- `docs/reports/engineering-report-20260520.md` §10 — interface gap analysis
 
 ## 3. Open tickets
 
@@ -63,20 +63,20 @@ What it adds:
 Critical: cross-root correctness is non-negotiable. See the ticket's §3 (pipeline correctness) and §6 (required tests).
 
 Cross-refs:
-- `sharedwatch-multifolder-design-20260522.md` — design quality layer (storage, access, defaults, control surface)
-- `sharedwatch-agent-fit-20260520_034245.md` §4 Gap 5 — original motivation
+- `docs/design/multifolder-design-20260522.md` — design quality layer (storage, access, defaults, control surface)
+- `docs/agent/agent-fit-20260520.md` §4 Gap 5 — original motivation
 
 ## 4. Discussion docs (pre-ticket)
 
-These live at the repo root, not in `tickets/`. They are read-only thinking artifacts that *may* become tickets:
+These live under `docs/`, not in `tickets/`. They are read-only thinking artifacts that *may* become tickets:
 
 | Doc | Topic | Status |
 |---|---|---|
-| `sharedwatch-multi-agent-discussion-20260522.md` | Multi-agent feature inventory, business problem framing | Discussion |
-| `sharedwatch-disclosure-attribution-discussion-20260522.md` | Progressive disclosure (L1–L6) + attribution layers | Discussion |
-| `sharedwatch-multifolder-design-20260522.md` | Multi-folder design quality (over SW-AGENT-3) | Discussion (extends an open ticket) |
-| `sharedwatch-agent-system-prompt-20260522.md` | System prompt template for agents using sharedwatch | Reference |
-| `test_dogfood.md` | Runnable dogfood scenarios | Reference |
+| `docs/design/multi-agent-discussion-20260522.md` | Multi-agent feature inventory, business problem framing | Discussion |
+| `docs/design/disclosure-attribution-discussion-20260522.md` | Progressive disclosure (L1–L6) + attribution layers | Discussion |
+| `docs/design/multifolder-design-20260522.md` | Multi-folder design quality (over SW-AGENT-3) | Discussion (extends an open ticket) |
+| `docs/agent/agent-system-prompt-20260522.md` | System prompt template for agents using sharedwatch | Reference |
+| `docs/dogfood/test_dogfood.md` | Runnable dogfood scenarios | Reference |
 
 Likely next tickets, derived from the discussion docs (not yet filed):
 

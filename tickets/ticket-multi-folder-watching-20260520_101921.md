@@ -14,10 +14,10 @@
 Repo state at filing: v0.7.3-20260520, 11 packages green. SW-AGENT-1, 2, 4, 5, 6 closed; this is the last open Gap from the agent-fit analysis.
 
 Back-refs:
-- agent-fit doc `sharedwatch-agent-fit-20260520_034245.md` §4 Gap 5 (multi-folder), §6 "yes, comfortably" verdict — currently blocked on this feature for the many-threads case.
+- agent-fit doc `../docs/agent/agent-fit-20260520.md` §4 Gap 5 (multi-folder), §6 "yes, comfortably" verdict — currently blocked on this feature for the many-threads case.
 - prior ticket `ticket-agent-event-access-20260520_035113.md` (SW-AGENT-1) — explicitly defers multi-folder watching to this ticket (§4).
 - prior tasklists: `tasklist_20260520_022339.md`, `tasklist_20260520_040435.md`, `tasklist_20260520_073211.md`.
-- design constraint baseline: `shared-drive-watcher-spec.md` (the original John spec) — describes a SINGLE folder. This ticket is an additive extension; the single-folder shape stays the default.
+- design constraint baseline: `../docs/specs/shared-drive-watcher-spec.md` (the original John spec) — describes a SINGLE folder. This ticket is an additive extension; the single-folder shape stays the default.
 
 ---
 
@@ -364,7 +364,7 @@ Plus: every existing test still passes; `gofmt -l .` clean; `go vet ./...` clean
 
 ## 10. References
 
-- `sharedwatch-agent-fit-20260520_034245.md` §4 Gap 5 — original motivation, framed for humans. This ticket reframes it for the agent use case.
+- `../docs/agent/agent-fit-20260520.md` §4 Gap 5 — original motivation, framed for humans. This ticket reframes it for the agent use case.
 - `ticket-agent-event-access-20260520_035113.md` §4 — the prior ticket that explicitly deferred multi-folder watching.
 - `tasklist_20260520_073211.md` — the session 5 worklog noting this as the one remaining real feature gap.
 - `sharedwatch/internal/watcher/service.go` — current single-root scan loop; reference for what becomes per-root.

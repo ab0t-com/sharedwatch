@@ -1,42 +1,55 @@
 # Repository map — sharedwatch
 
-The where-is-what reference. Cross-checks the live tree at `/home/ubuntu/claw/workspace/sharedwatch/` as of 2026-05-22.
+The where-is-what reference. Cross-checks the live tree at `/home/ubuntu/claw/workspace/sharedwatch/` as of 2026-05-23 (post-release-prep restructure).
 
 ## Contents
 1. Top-level layout
-2. The `sharedwatch/` Go project
+2. The `src/` Go module
 3. Package responsibilities
-4. Top-level documents (the shared folder)
+4. `docs/` — the team's shared documentation folder
 5. `tickets/` — filed work
-6. `docs/` inside the Go project
+6. `src/docs/` — program-internal docs
 7. Quick "where do I add X?" table
 
 ## 1. Top-level layout
 
 ```
 /
-├── TEAM.md                                # team contract, shared-folder policy
-├── shared-drive-watcher-spec.md           # original product spec (the John spec)
-├── note-to-sarah-about-watcher-spec.md    # follow-up note on the spec
-├── test_dogfood.md                        # runnable dogfood scenarios
-├── sharedwatch-engineering-report-*.md    # engineering status report
-├── sharedwatch-pmm-report-*.md            # product/marketing positioning
-├── sharedwatch-agent-fit-*.md             # multi-agent fit analysis
-├── sharedwatch-multi-agent-discussion-*.md
-├── sharedwatch-disclosure-attribution-discussion-*.md
-├── sharedwatch-multifolder-design-*.md
-├── sharedwatch-agent-system-prompt-*.md
-├── tickets/                               # filed work tickets
+├── README.md                              # thin orientation, points to src/README.md and docs/
+├── LICENSE                                # MIT
+├── manifest.yaml                          # release manifest template
+├── .gitignore
+├── .gitleaks.toml                         # secret-scan config (allowlists for test fixtures)
+├── docs/                                  # team docs, design discussions, reports, specs
+│   ├── README.md                          # docs index / manifest with descriptions
+│   ├── TEAM.md                            # team contract, shared-folder policy
+│   ├── design/                            # design discussions and evaluations
+│   ├── reports/                           # engineering / PMM / branch reports
+│   ├── specs/                             # original product specs
+│   ├── agent/                             # agent-specific docs (system prompt, fit analysis)
+│   └── dogfood/                           # test_dogfood.md + per-pass findings
+├── src/                                   # the Go module (everything Go lives here)
+│   ├── cmd/sharedwatch/main.go            # binary entry point
+│   ├── internal/                          # all packages (see §2)
+│   ├── docs/                              # program-internal docs (APPLICATION_FLOW, SCHEMA_CONTRACTS, ...)
+│   ├── go.mod  go.sum  Makefile  config.yaml
+│   ├── CHANGELOG.md  README.md  CONTRIBUTING.md  LICENSE
+│   └── examples/
+├── scripts/
+│   ├── install.sh                         # public installer (GitHub releases + local-dev fallback)
+│   ├── rebuild.sh                         # fmt + vet + test + build into src/.bin/
+│   └── release.sh                         # cut a release (cross-compile + dist/manifest.yaml)
+├── html/                                  # GitHub-Pages-style landing page
+├── tickets/                               # filed work tickets + tasklists
 │   ├── ticket-agent-event-access-*.md     # SW-AGENT-1 (landed)
-│   ├── ticket-multi-folder-watching-*.md  # SW-AGENT-3 (open)
+│   ├── ticket-multi-folder-watching-*.md  # SW-AGENT-3 (landed in v0.8)
+│   ├── ticket-content-diff-*.md           # SW-AGENT-15 / SW-AGENT-16 (open)
 │   ├── tasklist_*.md                      # session worklogs
 │   └── ...
-├── Skills/                                # agent-skill packages
-│   ├── sharedwatch-client/
-│   ├── sharedwatch-client-future/
-│   └── sharedwatch-contributor/           # this one
-└── sharedwatch/                           # the Go project
-    └── (see below)
+└── Skills/                                # agent-skill packages
+    ├── sharedwatch-client/
+    ├── sharedwatch-client-future/
+    └── sharedwatch-contributor/           # this one
 ```
 
 The repo root doubles as the team's shared workspace. Discussion docs, reports, tickets, and tasklists all live there. The Go code lives in the `sharedwatch/` subdirectory.
@@ -152,21 +165,26 @@ Key files:
 - `rename.go` — `DetectRenames(events)` pairs delete+create by size+mtime.
 - `service.go` — `Service.ScanAndQueue`, `EmitSynthetic`, `EmitSyntheticWithPayload`.
 
-## 4. Top-level documents (the shared folder)
+## 4. `docs/` — the team's shared documentation folder
 
-These live at the repo root and are part of the team's working artifacts:
+All free-form team docs live under `docs/`. Start at `docs/README.md` for the indexed manifest with one-line descriptions.
 
-- **TEAM.md** — collaboration contract; roles; file naming conventions; shared-folder policy.
-- **shared-drive-watcher-spec.md** — original product spec.
-- **note-to-sarah-about-watcher-spec.md** — follow-up note.
-- **sharedwatch-engineering-report-*.md** — engineering status snapshot.
-- **sharedwatch-pmm-report-*.md** — positioning/marketing.
-- **sharedwatch-agent-fit-*.md** — multi-agent fit analysis (gap inventory).
-- **sharedwatch-multi-agent-discussion-*.md** — multi-agent feature discussion.
-- **sharedwatch-disclosure-attribution-discussion-*.md** — progressive disclosure + attribution design.
-- **sharedwatch-multifolder-design-*.md** — multi-folder design quality layer (over SW-AGENT-3).
-- **sharedwatch-agent-system-prompt-*.md** — system prompt for AI agents using sharedwatch.
-- **test_dogfood.md** — runnable dogfood scenarios for the v1 product.
+- **`docs/TEAM.md`** — collaboration contract; roles; file naming conventions; shared-folder policy.
+- **`docs/specs/shared-drive-watcher-spec.md`** — original product spec.
+- **`docs/specs/note-to-sarah-about-watcher-spec.md`** — follow-up note on the spec.
+- **`docs/reports/engineering-report-20260520.md`** — engineering status snapshot.
+- **`docs/reports/pmm-report-20260520.md`** — positioning/marketing.
+- **`docs/reports/branch-report-feature-future-20260523.md`** — ship report for v0.8.0.
+- **`docs/agent/agent-fit-20260520.md`** — multi-agent fit analysis (gap inventory).
+- **`docs/agent/agent-system-prompt-20260522.md`** — system prompt for AI agents using sharedwatch.
+- **`docs/design/multi-agent-discussion-20260522.md`** — multi-agent feature discussion.
+- **`docs/design/disclosure-attribution-discussion-20260522.md`** — progressive disclosure + attribution design.
+- **`docs/design/multifolder-design-20260522.md`** — multi-folder design quality layer (over SW-AGENT-3).
+- **`docs/design/content-storage-evaluation-20260523.md`** — diff vs blob storage evaluation for SW-AGENT-16.
+- **`docs/design/design-questions-20260523.md`** — living Q&A log (Q1: git replacement? Q2: touch events vs content? Q3: auto-commit?).
+- **`docs/design/future-features-20260523.md`** — 15 predicted future features ranked by usage × need × design-fit.
+- **`docs/dogfood/test_dogfood.md`** — runnable dogfood scenarios for the v1 product.
+- **`docs/dogfood/findings-20260523.md`** — per-scenario findings from the v0.8.0 dogfood pass.
 
 ## 5. `tickets/` — filed work
 

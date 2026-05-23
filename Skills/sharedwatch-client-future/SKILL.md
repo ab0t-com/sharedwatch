@@ -7,7 +7,7 @@ description: Use sharedwatch after the multi-folder, progressive-disclosure, and
 
 Operate as an AI agent against sharedwatch after the agent-fit work tickets (SW-AGENT-3 multi-folder + progressive-disclosure aggregations + attribution v1 + actor/intent/lease features) have shipped.
 
-This skill describes how the client surface **will** behave once those features land. If the deployed binary doesn't yet support these commands, fall back to the `sharedwatch-client` skill — most patterns work in degraded form against today's CLI by replacing aggregation endpoints with `sql` queries.
+**As of v0.8.0 (May 2026), all features described in this skill have shipped.** The skill is no longer speculative — every command and envelope below is in the deployed binary. Use the `sharedwatch-client` skill instead only when operating against an older (pre-v0.8) binary; the version check below tells you which one applies.
 
 ## What changed vs the current-state skill
 
@@ -29,14 +29,14 @@ This skill describes how the client surface **will** behave once those features 
 - A **lease** is an advisory, time-bounded "I'm editing this" claim. Not enforced by the FS — but visible to cooperative peers.
 - A **drill hint** is a `drill` field in any aggregate JSON output that points to the next-finer query for each dimension. Follow it instead of memorizing CLI grammar.
 
-## First action — confirm you're in the future world
+## First action — confirm you're on v0.8.0+
 
 ```bash
 sharedwatch overview --format json 2>/dev/null \
-  || echo "future-state commands not available — use the sharedwatch-client skill instead"
+  || echo "v0.8.0 commands not available — pre-v0.8 binary; use the sharedwatch-client skill instead"
 ```
 
-If `overview` exits non-zero or with an unknown-subcommand error, the binary predates this skill. Fall back.
+If `overview` exits non-zero or with an unknown-subcommand error, the binary predates v0.8.0 and lacks these features. Fall back to `sharedwatch-client`. Otherwise: every command in this skill is shipped.
 
 ## Five+ commands to memorize
 
@@ -106,7 +106,7 @@ sharedwatch test emit auth/login.go \
   --tag refactor --tag auth
 ```
 
-These flags populate the conventional payload keys defined in `references/attribution-v1.md`. Querying remains `--payload-key actor --payload-value <x>`; the table additionally has a promoted `actor`/`session` column once the migration lands (check `schema --format json` to confirm).
+These flags populate the conventional payload keys defined in `references/attribution-v1.md`. Querying remains `--payload-key actor --payload-value <x>`. As of v0.8.0 `actor` is still parsed from `payload_json.actor` (no promoted column yet — `events.actor` was scoped out for the v0.8.0 ship); a future minor version may promote it. Use `--payload-key/--payload-value` for forward compatibility either way.
 
 ## Agentic patterns — updated
 

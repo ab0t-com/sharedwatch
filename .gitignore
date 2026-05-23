@@ -1,32 +1,66 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+# sharedwatch top-level .gitignore
+# (per-language details live alongside the Go module in src/)
+
+# --- Build & release artifacts ---
+dist/
+src/.bin/
+src/.ci-bin/
+.ci-bin/
+*.tar.gz
+*.tar.zst
+*.zip
+
+# --- Go ---
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Code coverage profiles and other test artifacts
 *.out
 coverage.*
 *.coverprofile
 profile.cov
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
 go.work
 go.work.sum
+# vendor/   # uncomment if vendoring
 
-# env file
+# --- SQLite (sharedwatch local state — never check in) ---
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-journal
+
+# --- sharedwatch local data dirs (when developers run the daemon in-repo) ---
+src/watch/
+src/sharedwatch.lock
+src/queue.db*
+src/.bin/
+src/.env.build.local
+
+# --- Secrets & env ---
 .env
+.env.*
+!.env.example
+.envrc
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+.zed/
+*.sublime-workspace
+*.sublime-project
+
+# --- Gitleaks bins shipped by CI step (do not commit) ---
+gitleaks
+gitleaks_*.tar.gz
+
+# --- Local-only notes (not for public release; keep your own) ---
+notes-local-*.md
+TODO-local-*.md

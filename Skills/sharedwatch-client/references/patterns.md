@@ -174,7 +174,7 @@ sharedwatch events list --path-glob 'auth/login.go' --since 1h --format jsonl \
    sharedwatch events list --path-glob 'auth/login.go' --since 1m --limit 1 --format jsonl
    ```
 
-**Why the paired synthetic event when you do NOT control `run`?** The watcher's auto-detected event will carry whatever attribution the `run` was launched with (none, if defaulted). The synthetic event carries yours. Filter by `--payload-key actor` to find your event; the watcher's same-path event may coalesce with yours within the 5 s window — and once SW-AGENT-11 (actor-aware coalesce) lands, coalesce no longer crosses actor boundaries so both stay distinct.
+**Why the paired synthetic event when you do NOT control `run`?** The watcher's auto-detected event will carry whatever attribution the `run` was launched with (none, if defaulted). The synthetic event carries yours. Filter by `--payload-key actor` to find your event. As of v0.8.0 (SW-AGENT-11), coalesce is actor-aware: same-path events from different actors stay distinct rather than merging. Same-path same-actor events still coalesce within the 5 s window.
 
 ## 6. PATTERN: did-peer-respond
 

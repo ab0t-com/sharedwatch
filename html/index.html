@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>sharedwatch — calm, pull-based folder activity feed</title>
+  <meta name="description" content="A single Go binary that watches a local folder, captures every change into a SQLite-backed queue, and serves it back on your own cadence. MIT-licensed.">
+  <link rel="canonical" href="https://github.com/ab0t/sharedwatch">
+  <style>
+    :root {
+      --fg: #1a1a1a;
+      --muted: #555;
+      --accent: #1f6feb;
+      --bg: #fafafa;
+      --code-bg: #f0f0f0;
+      --border: #e5e5e5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --fg: #e6e6e6;
+        --muted: #aaa;
+        --accent: #58a6ff;
+        --bg: #0d1117;
+        --code-bg: #161b22;
+        --border: #30363d;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: var(--fg);
+      background: var(--bg);
+      margin: 0;
+      padding: 2rem 1rem;
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    h1 { font-size: 2.25rem; margin: 0 0 0.25rem; letter-spacing: -0.02em; }
+    .tagline { color: var(--muted); margin: 0 0 2rem; font-size: 1.1rem; }
+    h2 { font-size: 1.25rem; margin-top: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25rem; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, pre {
+      font: 0.92rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: var(--code-bg);
+      border-radius: 4px;
+    }
+    code { padding: 0.1rem 0.35rem; }
+    pre { padding: 0.9rem 1rem; overflow-x: auto; border: 1px solid var(--border); }
+    pre code { background: transparent; padding: 0; }
+    .pill {
+      display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px;
+      background: var(--code-bg); color: var(--muted); font-size: 0.8rem;
+      border: 1px solid var(--border); margin-right: 0.4rem;
+    }
+    footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem; }
+    ul { padding-left: 1.3rem; }
+    li { margin: 0.25rem 0; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>sharedwatch</h1>
+  <p class="tagline">Calm, durable, pull-based activity feed for a local shared folder.</p>
+  <p>
+    <span class="pill">MIT</span>
+    <span class="pill">Go 1.22+</span>
+    <span class="pill">single binary</span>
+    <span class="pill">SQLite-backed</span>
+  </p>
+
+  <p>
+    A single Go binary that watches a folder on disk, captures every change into a SQLite-backed queue,
+    and lets you review the activity on your own cadence — every 5&ndash;10 minutes by default,
+    near-real-time on demand. The watcher never interrupts you; you pull a digest when you're ready.
+  </p>
+
+  <h2>Install</h2>
+  <pre><code>curl -fsSL https://raw.githubusercontent.com/ab0t/sharedwatch/main/scripts/install.sh | bash</code></pre>
+  <p>Or grab a tagged release tarball from the <a href="https://github.com/ab0t/sharedwatch/releases">releases page</a>.</p>
+
+  <h2>60-second quickstart</h2>
+  <pre><code>sharedwatch init
+sharedwatch run &amp;
+echo "hello" &gt; ~/.local/share/sharedwatch/watch/hello.md
+sharedwatch digest list</code></pre>
+
+  <h2>What it's for</h2>
+  <ul>
+    <li>A single host where a human (or assistant agent) wants ambient awareness of a folder without being interrupted.</li>
+    <li>Low-to-moderate write volume, restart-safe operation with a durable on-disk queue.</li>
+    <li>Multi-folder watching with stable labels (<code>--root auth=/path</code>, <code>--root billing=/path</code>).</li>
+    <li>Progressive disclosure: overview &rarr; stats &rarr; full event list, so consumers fetch only what they need.</li>
+  </ul>
+
+  <h2>What it's not</h2>
+  <ul>
+    <li>Not a git replacement &mdash; this records that a file changed, not byte-level content history.</li>
+    <li>Not a multi-host file share or sync service.</li>
+    <li>Not push-based &mdash; consumers pull on their own cadence.</li>
+  </ul>
+
+  <h2>Links</h2>
+  <ul>
+    <li><a href="https://github.com/ab0t/sharedwatch">Source on GitHub</a></li>
+    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/README.md">README</a></li>
+    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/src/CHANGELOG.md">Changelog</a></li>
+    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/LICENSE">License (MIT)</a></li>
+  </ul>
+
+  <footer>
+    &copy; 2026 ab0t.com &mdash; MIT licensed. This page is the project landing page; see the repo for source.
+  </footer>
+</main>
+</body>
+</html>
