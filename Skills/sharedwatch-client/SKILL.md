@@ -252,7 +252,7 @@ Compact list; full edge-case catalog in `references/gotchas.md`.
 - **Coalesce window (5 s)**: two modifies to the same path inside 5 s collapse into one row.
 - **Reconcile duplicates**: the 30-min reconcile re-emits anything the watcher missed; you may see the same logical change once from `source=watcher` and once from `source=reconciler`.
 - **Cursor races**: two agents sharing a cursor name pass each other's reads. Use `<actor>-<task>` to scope.
-- **Filter-change warning**: reusing a cursor with a different filter scope silently skips events. New scope = new cursor name.
+- **Filter-change is SILENT (no warning emitted)**: reusing a named cursor with a different `--type`, `--path-glob`, `--payload-key/--payload-value`, or other filter scope silently skips events past the cursor's prior position that didn't match the prior filter. Empirically verified — the binary does NOT warn (despite older guidance suggesting it does). Always use a NEW cursor name when you change filter scope (e.g. `<actor>-<task>-<scope-hash>`). See `docs/design/cursor-filter-change-discussion-20260524.md` for the open SW-AGENT-28 ticket if you want a warning to be implemented.
 - **No content captured**: sharedwatch records *that* a file changed and (optionally) its SHA-256. Read the file for bytes.
 - **1-second mtime resolution** on some filesystems. Don't rely on ordering within the same tick.
 

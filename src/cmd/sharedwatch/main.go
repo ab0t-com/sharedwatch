@@ -524,6 +524,11 @@ func handleTest(ctx context.Context, a *app.App, args []string, rootAttr attrFla
 	}
 	fs := flag.NewFlagSet("test emit", flag.ExitOnError)
 	payload := fs.String("payload", "", "raw JSON payload (mutually exclusive with --actor / --session / ...)")
+	// SW-AGENT-27 (F39-A/B): explicit root targeting in multi-root mode.
+	// Without --root, the emit lands in the first configured root (legacy
+	// behaviour preserved). With --root <label>, routes to the matching
+	// root or errors with the available labels.
+	rootLabel := fs.String("root", "", "watch_root label to route the emit to (multi-root mode; default: first configured root)")
 	var subAttr attrFlags
 	bindAttrFlags(fs, &subAttr, "overrides any root-level attribution for this emit")
 	rest := args[1:]
@@ -551,7 +556,7 @@ func handleTest(ctx context.Context, a *app.App, args []string, rootAttr attrFla
 	if finalPayload == "" && !merged.isEmpty() {
 		finalPayload = events.BuildPayloadV1(merged.toPayload())
 	}
-	e, coalescedInto, err := a.TestEmitWithPayloadResult(ctx, rel, finalPayload)
+	e, coalescedInto, err := a.TestEmitWithPayloadResultToRoot(ctx, rel, *rootLabel, finalPayload)
 	if err != nil {
 		fatal(err)
 	}

@@ -4,6 +4,22 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+## SW-AGENT-27 — multi-root `test emit --root` routing (v0.0.11 candidate)
+
+Surfaced by background dogfood (scenarios 37-40 against v0.0.9) — Finding F39-A.
+
+### Fixed
+- **F39-A + F39-B**: `test emit --root <label>` now routes the synthetic event to the named configured root. Without `--root`, behaviour is unchanged (lands in the first configured root — legacy preserved). With `--root <label>` that doesn't match any configured root, errors with the available labels. Previously the `--root` flag was rejected at the subcommand level ("flag provided but not defined: -root") even though the global `--root` flag existed, and multi-root setups had no way to populate any root except the first via `test emit`.
+- Implementation: new `watcher.Service.EmitSyntheticToRoot(ctx, relPath, rootLabel, ...)` + matching `app.App.TestEmitWithPayloadResultToRoot`. The existing `EmitSyntheticWithPayload` / `TestEmitWithPayloadResult` wrap the new functions with `rootLabel=""` so production callers (reconcile, watcher) and the previous public API are unchanged.
+
+### Documented (no code change, scenario 40 F40-C)
+- **F40-C**: The "filter-change warning" claim in the Skill gotchas is **not implemented** in the binary. Empirically the binary silently skips events that don't match the changed filter scope. Docs corrected in `Skills/sharedwatch-client/SKILL.md` (gotcha 14) and `docs/agent/agent-system-prompt-20260522.md` — both now say "the binary does NOT warn". Use a NEW cursor name when changing filter scope. The full discussion of options (implement warning vs document, schema requirements) lives in `docs/design/cursor-filter-change-discussion-20260524.md`; recommended (B) — doc fix + defer code change as SW-AGENT-28.
+
+### Deferred (still open from dogfood scenarios 37-40)
+- **F37-B**: `digest list --format json` missing. Output-parity sweep candidate — small fix, will bundle with the next round if it accumulates with others.
+- **F39-C**: `test emit` pre-init produces a different payload shape (synthetic marker) than post-init. Lower priority — pre-init usage is unusual and the marker is descriptive.
+- **F40-E**: `cursor delete` doesn't exist; only `reset`. Doc-only clarification recommended for next round.
+
 ## SW-AGENT-26 — `<subcmd> --help` safety (v0.0.10 candidate, bundled with SW-AGENT-25)
 
 Surfaced by parallel dogfood (scenarios 37-40 against v0.0.9) — Finding F37-E.

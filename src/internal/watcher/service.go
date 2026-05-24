@@ -64,9 +64,9 @@ func (s Service) EmitSynthetic(ctx context.Context, relPath string, typ events.T
 // empty, a `{"synthetic":true,"path":...}` marker is used so the event is
 // distinguishable from real watcher activity).
 //
-// In multi-root mode the synthetic event is tagged with the FIRST configured
-// root's label (a sensible default for testing). A future `test emit --root
-// <label>` flag will allow explicit targeting.
+// In multi-root mode without an explicit --root, the synthetic event is
+// tagged with the FIRST configured root's label. SW-AGENT-27 added
+// EmitSyntheticToRoot for explicit targeting.
 func (s Service) EmitSyntheticWithPayload(ctx context.Context, relPath string, typ events.Type, source events.Source, payloadJSON string) (events.Event, error) {
 	e, _, err := s.EmitSyntheticWithPayloadResult(ctx, relPath, typ, source, payloadJSON)
 	return e, err
@@ -78,11 +78,42 @@ func (s Service) EmitSyntheticWithPayload(ctx context.Context, relPath string, t
 // they can surface "coalesced into <id>" instead of advertising a phantom
 // id for a row that never landed.
 func (s Service) EmitSyntheticWithPayloadResult(ctx context.Context, relPath string, typ events.Type, source events.Source, payloadJSON string) (events.Event, string, error) {
+	return s.EmitSyntheticToRoot(ctx, relPath, "", typ, source, payloadJSON)
+}
+
+// EmitSyntheticToRoot is the root-aware variant. If rootLabel is non-empty
+// the event is routed to the matching configured root; if no root matches
+// the supplied label, an error is returned with the available labels so
+// the caller can correct. Empty rootLabel preserves the legacy "use
+// roots[0]" behaviour for single-root setups and multi-root setups where
+// the user didn't specify --root. SW-AGENT-27.
+func (s Service) EmitSyntheticToRoot(ctx context.Context, relPath, rootLabel string, typ events.Type, source events.Source, payloadJSON string) (events.Event, string, error) {
 	if err := validateRelPath(relPath); err != nil {
 		return events.Event{}, "", err
 	}
 	roots := s.effectiveRoots()
 	root := roots[0]
+	if rootLabel != "" {
+		matched := false
+		for _, r := range roots {
+			if r.Label == rootLabel {
+				root = r
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			labels := make([]string, 0, len(roots))
+			for _, r := range roots {
+				if r.Label == "" {
+					labels = append(labels, "(default)")
+				} else {
+					labels = append(labels, r.Label)
+				}
+			}
+			return events.Event{}, "", fmt.Errorf("--root %q does not match any configured root; available: %v", rootLabel, labels)
+		}
+	}
 	abs := root.Path + "/" + relPath
 	if payloadJSON == "" {
 		if s.PayloadJSON != "" {

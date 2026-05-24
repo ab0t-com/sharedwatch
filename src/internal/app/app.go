@@ -294,7 +294,15 @@ func (a *App) TestEmitWithPayload(ctx context.Context, relPath, payloadJSON stri
 // fresh row was inserted. The CLI `test emit` handler uses this to print
 // "coalesced into <prior_id>" instead of returning a phantom id.
 func (a *App) TestEmitWithPayloadResult(ctx context.Context, relPath, payloadJSON string) (events.Event, string, error) {
-	e, coalescedInto, err := a.Watcher.EmitSyntheticWithPayloadResult(ctx, relPath, events.TypeModified, events.SourceTest, payloadJSON)
+	return a.TestEmitWithPayloadResultToRoot(ctx, relPath, "", payloadJSON)
+}
+
+// TestEmitWithPayloadResultToRoot is the root-aware variant. When rootLabel
+// is empty, falls back to the legacy "use roots[0]" behaviour. When non-empty,
+// routes to the named configured root or errors with available labels.
+// SW-AGENT-27.
+func (a *App) TestEmitWithPayloadResultToRoot(ctx context.Context, relPath, rootLabel, payloadJSON string) (events.Event, string, error) {
+	e, coalescedInto, err := a.Watcher.EmitSyntheticToRoot(ctx, relPath, rootLabel, events.TypeModified, events.SourceTest, payloadJSON)
 	if err != nil {
 		return events.Event{}, "", err
 	}
