@@ -4,6 +4,20 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — `--quiet` global flag (SW-AGENT-19)
+- Suppresses the `Next:` hint block on every command (overrides any `--hints` profile resolution) AND the friendly informational lines on `init` ("watch_path=…"), `stop` ("sent SIGTERM…" / "daemon stopped cleanly" / "no running daemon"). Data output and errors are unaffected.
+- Standard convention (matches `git --quiet`, `gh --quiet`). Useful when piping captured output into log parsers that get confused by the human-friendly noise.
+
+### Added — `--dry-run` on `events retry` and `events recover-stuck`
+- Both destructive read-side commands now accept `--dry-run`. Prints the event IDs that *would* be modified; does not issue the UPDATE.
+- Mirrors the live UPDATE's WHERE clause via a SELECT so the preview is byte-for-byte accurate.
+
+### Added — JSON-structured errors when `--format json|jsonl` is in effect
+- New `fatalJSON(jsonMode, code, msg)` helper. When called with `jsonMode=true`, emits a JSON envelope on **stdout** (not stderr — so the consumer's stream stays uninterrupted) with shape: `{"format_version": 1, "error": {"code": "<code>", "message": "<msg>"}}` and exits 1.
+- Wired into `events list` for the high-value bad-input paths: `--since` parse failure, `--until` parse failure, `--root foo=/path` rejection, `--since` / `--since-cursor` mutex violation.
+- Small fixed error-code vocabulary: `bad_flag` / `not_found` / `permission` / `db_error` / `network_error` / `internal`. Consumers may key behaviour off these.
+- Text errors on commands without `--format json` are unchanged (still on stderr).
+
 ### Added — env-var resolution layer for agent identity + output defaults (SW-AGENT-18 §3)
 - New resolution chain: `flag > env > config.yaml > built-in default`. Env vars layer between config and flag.
 - Canonical `SHAREDWATCH_*` env vars: `SHAREDWATCH_ACTOR`, `_ACTOR_KIND`, `_SESSION`, `_TASK`, `_ADDRESSEE` (attribution fields); `SHAREDWATCH_FORMAT`, `_ROOT`, `_CURSOR_NAME` (per-command defaults); `SHAREDWATCH_HINTS` (existing).

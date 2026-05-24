@@ -4,7 +4,7 @@
 .\"
 .\" Source of truth for the program: src/cmd/sharedwatch/main.go
 .\" When commands or flags change, update this file in the same PR.
-.TH SHAREDWATCH 1 "2026-05-24" "v0.0.5" "User Commands"
+.TH SHAREDWATCH 1 "2026-05-24" "v0.0.6" "User Commands"
 .SH NAME
 sharedwatch \- calm, pull-based activity journal for a local shared folder
 .SH SYNOPSIS
@@ -84,11 +84,14 @@ bounded and forces agents to choose the dimension before drilling.
 .B events cursor list|reset \fIname\fR|set \fIname\fR|encode|decode
 Manage server-side iteration cursors.
 .TP
-.B events retry \fR[\fB--max-retries\fR \fIN\fR]
-Requeue failed events back to pending.
+.B events retry \fR[\fB--max-retries\fR \fIN\fR] [\fB--dry-run\fR]
+Requeue failed events back to pending. With \fB--dry-run\fR, prints
+the event IDs that would be requeued without modifying the database.
 .TP
-.B events recover-stuck \fR[\fB--older-than\fR \fIduration\fR]
-Flip events stuck in 'processing' state back to pending. Default cutoff 5m.
+.B events recover-stuck \fR[\fB--older-than\fR \fIduration\fR] [\fB--dry-run\fR]
+Flip events stuck in 'processing' state back to pending. Default
+cutoff 5m. With \fB--dry-run\fR, prints the event IDs that would be
+flipped without modifying the database.
 .TP
 .B overview \fR[\fB--format\fR text|json] [\fB--since\fR \fIduration\fR]
 Cross-root L1 summary with by-type counts, top actors, and a \fIdrill\fR map
@@ -182,6 +185,14 @@ Log format. Default \fItext\fR.
 .TP
 .BR --log-level " " debug|info|warn|error
 Log level. Default \fIinfo\fR.
+.TP
+.BR --quiet
+Suppress the \fBNext:\fR hint block on every command and silence the
+friendly informational lines printed by \fBinit\fR and \fBstop\fR
+(\fIwatch_path=…\fR, \fIsent SIGTERM…\fR, \fIdaemon stopped cleanly\fR,
+\fIno running daemon\fR). Data output and errors are unaffected.
+Equivalent to \fB--hints off\fR plus silencing the chatty status lines.
+Standard convention; matches \fBgit --quiet\fR / \fBgh --quiet\fR.
 .TP
 .BR --hints " " default|agent|terse|off
 Next-step suggestions profile. \fIdefault\fR shows up to 4 contextual
@@ -359,6 +370,15 @@ Operational failure (DB error, file I/O, network error during \fBupdate\fR).
 .TP
 .B 2
 Usage error (unknown subcommand, malformed flags).
+.PP
+On commands that take \fB--format\fR (\fBevents list\fR, \fBevents stats\fR,
+\fBsql\fR, \fBschema\fR, \fBoverview\fR), when \fB--format json\fR or
+\fB--format jsonl\fR is set, errors are emitted as a JSON envelope on
+\fBstdout\fR (so the JSON consumer's stream is uninterrupted) with shape
+\fI{"format_version": 1, "error": {"code": "<code>", "message": "<msg>"}}\fR
+and exit status 1. Error codes are drawn from a small fixed
+vocabulary: \fIbad_flag\fR, \fInot_found\fR, \fIpermission\fR,
+\fIdb_error\fR, \fInetwork_error\fR, \fIinternal\fR.
 .SH SEE ALSO
 The full README, design discussions, and dogfood scenarios live in the
 source repository at \fIhttps://github.com/ab0t-com/sharedwatch\fR. The

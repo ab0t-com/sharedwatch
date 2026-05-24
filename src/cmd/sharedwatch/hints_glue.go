@@ -13,16 +13,27 @@ import (
 // parsing; handlers read it via resolveHintsProfile().
 var hintsProfileFlag string
 
+// quietMode mirrors the --quiet root flag. When true:
+//   - resolveHintsProfile returns ProfileOff regardless of other inputs
+//   - friendly informational lines (init / stop / no-daemon) are suppressed
+//
+// Errors still print. quietMode never affects the actual data output.
+var quietMode bool
+
 // configSearch records what the config-file search step actually did
 // for this invocation. main() populates it during config load; handlers
 // that need to render it (e.g. `config show`) read it directly.
 var configSearch config.SearchResult
 
 // resolveHintsProfile picks the effective profile for the current
-// invocation: --hints flag > SHAREDWATCH_HINTS env > json-output promotion
-// > default. Pass isJSON=true when the command's output is the JSON
-// envelope (so agents reading JSON get the richer hint set automatically).
+// invocation. --quiet (highest) > --hints flag > SHAREDWATCH_HINTS env
+// > json-output promotion > default. Pass isJSON=true when the
+// command's output is the JSON envelope (so agents reading JSON get
+// the richer hint set automatically).
 func resolveHintsProfile(isJSON bool) hints.Profile {
+	if quietMode {
+		return hints.ProfileOff
+	}
 	return hints.ResolveProfile(hintsProfileFlag, os.Getenv("SHAREDWATCH_HINTS"), isJSON)
 }
 

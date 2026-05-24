@@ -107,6 +107,8 @@ safe_clear_files && $SW reconcile now    # baseline before next scenario
 | 16 | Burst of 200 events / 60s | Queue depth + throttling |
 | 17 | Cross-actor churn on same file | Conflict surfacing |
 | 18 | Symlink to outside the root | Boundary integrity |
+| 19 | (reserved for SW-AGENT-16 content-diff dogfood) | — |
+| 20 | CLI polish: `--quiet`, `--dry-run`, JSON errors (v0.0.6) | UX guarantees + structured errors |
 
 ---
 
@@ -632,3 +634,68 @@ find "$QUARANTINE" -type f -printf '%T@ %p\n' | sort -n
 `$QUARANTINE` and `$ARCHIVE` are append-only by convention — never `rm` them, just let them grow during the pass. Clean up by hand after you've reviewed the artifacts.
 
 After a pass, the `artifacts/` directory becomes the canonical "this is what real activity looks like" reference that we can attach to release notes, point new contributors at, and re-run for regression checks.
+
+---
+
+## 20 — CLI polish: `--quiet`, `--dry-run`, JSON errors (v0.0.6)
+
+**Goal:** verify the three additions from SW-AGENT-19 each behave as specified — `--quiet` suppresses Next blocks and friendly info, `--dry-run` previews destructive commands without writing, and `--format json` emits errors as a JSON envelope on stdout.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-20
+rm -rf "$DOG" && mkdir -p "$DOG"
+$SW --data-dir "$DOG" init >/dev/null
+$SW --data-dir "$DOG" --actor sc20 test emit a.md >/dev/null
+# Mark one event failed so --dry-run has something to preview:
+$SW --data-dir "$DOG" sql --write "UPDATE events SET status='failed' WHERE id=(SELECT id FROM events LIMIT 1)" >/dev/null
+```
+
+**Actions + expected:**
+
+```bash
+# (a) --quiet suppresses Next: hint block on status
+$SW --data-dir "$DOG" --quiet status
+# Expected: single status line; NO blank line; NO "Next:" header.
+
+# (b) --quiet silences init / stop friendly messages
+rm -rf /tmp/sw-quiet-init && $SW --data-dir /tmp/sw-quiet-init --quiet init
+# Expected: zero stdout output, exit 0.
+$SW --data-dir "$DOG" --quiet stop
+# Expected: zero stdout output, exit 0 (no daemon was running).
+
+# (c) --dry-run on events retry previews without writing
+$SW --data-dir "$DOG" events retry --dry-run
+# Expected: "dry-run: would requeue 1 failed event(s):" + the event id.
+$SW --data-dir "$DOG" sql "SELECT status FROM events WHERE id=(SELECT id FROM events LIMIT 1)"
+# Expected: status = 'failed' (unchanged by dry-run).
+
+# (d) --dry-run on events recover-stuck (no stuck events expected here)
+$SW --data-dir "$DOG" events recover-stuck --dry-run
+# Expected: "dry-run: no stuck processing events would be flipped"
+
+# (e) JSON-structured error on bad --since when --format jsonl
+$SW --data-dir "$DOG" events list --format jsonl --since not-a-time
+# Expected on STDOUT (exit 1):
+#   {
+#     "format_version": 1,
+#     "error": {
+#       "code": "bad_flag",
+#       "message": "--since: not a valid RFC3339 timestamp or duration: \"not-a-time\""
+#     }
+#   }
+
+# (f) Same error WITHOUT --format json: plain text on stderr (unchanged behaviour)
+$SW --data-dir "$DOG" events list --since not-a-time
+# Expected on STDERR (exit 1): error: --since: not a valid RFC3339 timestamp or duration: "not-a-time"
+```
+
+**What this exercises:**
+- `--quiet` resolution path through `resolveHintsProfile` (forced ProfileOff).
+- `--quiet` gating of friendly info in `handleInit` and `handleStop`.
+- `events retry --dry-run` and `events recover-stuck --dry-run` mirror the live UPDATE's WHERE clause via SELECT for accurate preview without modification.
+- `fatalJSON` envelope shape on stdout when `--format json|jsonl` is set; unchanged stderr text on the default text format.
+
+**Pass criteria:** all six commands behave exactly as the expected blocks describe. Any divergence is a regression in SW-AGENT-19's contract.
+
+**Recorded run (v0.0.6, 2026-05-24):** see worklog in [`../../tickets/tasklist_20260524_051945.md`](../../tickets/tasklist_20260524_051945.md) for the actual captured output against the deployed binary.

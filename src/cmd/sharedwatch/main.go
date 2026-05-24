@@ -55,6 +55,7 @@ func main() {
 	hashFlag := root.String("hash", "", "enable content hashing: on|off (default off)")
 	producerOverride := root.String("producer", "", "override producer_id stamped on emitted events")
 	hintsFlag := root.String("hints", "", "next-step suggestions profile: default|agent|terse|off (env SHAREDWATCH_HINTS; auto-promotes to agent for --format json)")
+	quietFlag := root.Bool("quiet", false, "suppress Next: hint blocks and friendly informational lines (errors still print); equivalent to --hints off + silenced init/stop status messages")
 	var rootAttr attrFlags
 	bindAttrFlags(root, &rootAttr, "applied to every event emitted during this invocation")
 	showVersion := root.Bool("version", false, "print version and exit")
@@ -67,6 +68,7 @@ func main() {
 		os.Exit(2)
 	}
 	hintsProfileFlag = *hintsFlag
+	quietMode = *quietFlag
 	if *showVersion {
 		fmt.Println("sharedwatch", Version)
 		return
@@ -520,7 +522,29 @@ func handleEvents(ctx context.Context, a *app.App, args []string) {
 	case "retry":
 		fs := flag.NewFlagSet("events retry", flag.ExitOnError)
 		maxRetries := fs.Int("max-retries", 0, "skip events that have already failed N+ times (0 = no cap)")
+		dryRun := fs.Bool("dry-run", false, "list the event IDs that would be requeued; don't modify the database")
 		_ = fs.Parse(args[1:])
+		if *dryRun {
+			// Mirror the UPDATE's WHERE clause as a SELECT so the preview
+			// is byte-for-byte accurate.
+			q := `SELECT id FROM events WHERE status='failed'`
+			if *maxRetries > 0 {
+				q = fmt.Sprintf(`SELECT id FROM events WHERE status='failed' AND retry_count < %d`, *maxRetries)
+			}
+			_, rows, err := a.Store.RawSQL(ctx, q, false)
+			if err != nil {
+				fatal(err)
+			}
+			if len(rows) == 0 {
+				fmt.Println("dry-run: no failed events would be requeued")
+				return
+			}
+			fmt.Printf("dry-run: would requeue %d failed event(s):\n", len(rows))
+			for _, r := range rows {
+				fmt.Println("  ", r[0])
+			}
+			return
+		}
 		n, err := a.Store.RequeueFailedEventsWithLimit(ctx, *maxRetries)
 		if err != nil {
 			fatal(err)
@@ -533,7 +557,25 @@ func handleEvents(ctx context.Context, a *app.App, args []string) {
 	case "recover-stuck":
 		fs := flag.NewFlagSet("events recover-stuck", flag.ExitOnError)
 		older := fs.Duration("older-than", 5*time.Minute, "consider 'processing' events older than this duration as stuck")
+		dryRun := fs.Bool("dry-run", false, "list the event IDs that would be flipped back to pending; don't modify the database")
 		_ = fs.Parse(args[1:])
+		if *dryRun {
+			cutoff := time.Now().UTC().Add(-(*older)).Format(time.RFC3339Nano)
+			q := fmt.Sprintf(`SELECT id FROM events WHERE status='processing' AND observed_at < '%s'`, cutoff)
+			_, rows, err := a.Store.RawSQL(ctx, q, false)
+			if err != nil {
+				fatal(err)
+			}
+			if len(rows) == 0 {
+				fmt.Println("dry-run: no stuck processing events would be flipped")
+				return
+			}
+			fmt.Printf("dry-run: would flip %d stuck processing event(s):\n", len(rows))
+			for _, r := range rows {
+				fmt.Println("  ", r[0])
+			}
+			return
+		}
 		n, err := a.Store.RecoverStuckProcessing(ctx, *older)
 		if err != nil {
 			fatal(err)
@@ -655,16 +697,20 @@ func handleEventsList(ctx context.Context, a *app.App, args []string) {
 	payloadKey := fs.String("payload-key", "", "post-filter: payload_json[<key>] must equal --payload-value")
 	payloadValue := fs.String("payload-value", "", "see --payload-key")
 	_ = fs.Parse(args)
+	// SW-AGENT-19 §3.3: when --format is json/jsonl, errors emit as a
+	// JSON envelope on stdout instead of text on stderr — agents reading
+	// the JSON stream don't have to multiplex stderr.
+	jsonErr := isJSONFormat(*formatFlag)
 
 	// Reject `--root foo=/path` on read commands — definitions belong on root.
 	for _, r := range watchRoots {
 		if strings.Contains(r, "=") {
-			fatal(fmt.Errorf("--root on events list is a FILTER (just the label). To define a root use `--root <label>=<path>` on the root command (before the subcommand)."))
+			fatalJSON(jsonErr, errBadFlag, "--root on events list is a FILTER (just the label). To define a root use `--root <label>=<path>` on the root command (before the subcommand).")
 		}
 	}
 
 	if *sinceCursor != "" && *since != "" {
-		fatal(fmt.Errorf("--since and --since-cursor are mutually exclusive"))
+		fatalJSON(jsonErr, errBadFlag, "--since and --since-cursor are mutually exclusive")
 	}
 
 	// When a cursor is in play, results MUST iterate ASC so the cursor advances
@@ -701,14 +747,14 @@ func handleEventsList(ctx context.Context, a *app.App, args []string) {
 	if *since != "" {
 		t, err := parseSinceUntil(*since)
 		if err != nil {
-			fatal(fmt.Errorf("--since: %w", err))
+			fatalJSON(jsonErr, errBadFlag, "--since: %v", err)
 		}
 		filter.Since = t
 	}
 	if *until != "" {
 		t, err := parseSinceUntil(*until)
 		if err != nil {
-			fatal(fmt.Errorf("--until: %w", err))
+			fatalJSON(jsonErr, errBadFlag, "--until: %v", err)
 		}
 		filter.Until = t
 	}
@@ -1318,9 +1364,13 @@ func eventsAsRows(evs []events.Event, includeWatchRoot bool) ([]string, [][]any)
 
 func handleInit(a *app.App) {
 	// app.New already created WatchPath and the DB. Print a small
-	// confirmation so users know where data lives.
-	fmt.Printf("watch_path=%s\ndb_path=%s\ndata_dir=%s\n", a.Cfg.WatchPath, a.Cfg.DBPath, a.Cfg.DataDir)
-	// Smart hints (SW-AGENT-17): "...and now run me".
+	// confirmation so users know where data lives. --quiet suppresses
+	// (SW-AGENT-19) for scripts that only care about the exit code.
+	if !quietMode {
+		fmt.Printf("watch_path=%s\ndb_path=%s\ndata_dir=%s\n", a.Cfg.WatchPath, a.Cfg.DBPath, a.Cfg.DataDir)
+	}
+	// Smart hints (SW-AGENT-17): "...and now run me". RenderText itself
+	// no-ops on ProfileOff so --quiet flows through without extra logic.
 	hints.RenderText(os.Stdout, hints.For("init", hints.Context{
 		Profile:   resolveHintsProfile(false),
 		WatchPath: a.Cfg.WatchPath,
@@ -1400,6 +1450,8 @@ COMMANDS
   config show [--json]      print effective config + env vars + searched config files
   stop [--timeout 10s]      send SIGTERM to the running daemon (PID from lock file);
                             --force escalates to SIGKILL after --timeout
+  events retry [--dry-run]  requeue failed events; --dry-run lists IDs without writing
+  events recover-stuck [--dry-run]   flip stuck processing events; --dry-run lists IDs
   version                   print version and exit
   help                      print this help
 
@@ -1474,6 +1526,61 @@ EXAMPLES
 
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, "error:", err)
+	os.Exit(1)
+}
+
+// isJSONFormat reports whether the given --format value will produce
+// structured (machine-readable) output. Used by handlers to decide
+// whether errors should be emitted as a JSON envelope or text on
+// stderr (see fatalJSON).
+func isJSONFormat(format string) bool {
+	switch strings.ToLower(strings.TrimSpace(format)) {
+	case "json", "jsonl":
+		return true
+	}
+	return false
+}
+
+// Canonical error codes for fatalJSON (SW-AGENT-19 §3.3). Small fixed
+// vocabulary, additive over time. Consumers may key behaviour off these.
+const (
+	errBadFlag      = "bad_flag"      // usage error / malformed flag value
+	errNotFound     = "not_found"     // resource (cursor, root, digest, ...) doesn't exist
+	errPermission   = "permission"    // file or socket permission denied
+	errDBError      = "db_error"      // SQLite / migration failure
+	errNetworkError = "network_error" // only used by `update`
+	errInternal     = "internal"      // anything that doesn't fit above
+)
+
+// fatalJSON emits a structured error envelope and exits 1.
+//
+// When jsonMode is false, behaves identically to fatal(err) — text on
+// stderr. When jsonMode is true, emits to STDOUT (so the JSON consumer's
+// stream is uninterrupted by mixing channels):
+//
+//	{"format_version": 1, "error": {"code": "<code>", "message": "<msg>"}}
+//
+// Wired into handlers that take --format (events list, events stats, sql,
+// schema, overview). Other handlers continue to use plain fatal() — their
+// errors aren't competing with a JSON-stream consumer.
+func fatalJSON(jsonMode bool, code string, format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if !jsonMode {
+		fmt.Fprintln(os.Stderr, "error:", msg)
+		os.Exit(1)
+	}
+	envelope := struct {
+		FormatVersion int `json:"format_version"`
+		Error         struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}{FormatVersion: 1}
+	envelope.Error.Code = code
+	envelope.Error.Message = msg
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	_ = enc.Encode(envelope)
 	os.Exit(1)
 }
 

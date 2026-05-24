@@ -42,7 +42,9 @@ func handleStop(_ context.Context, cfg config.Config, args []string) {
 
 	data, err := os.ReadFile(lockPath)
 	if errors.Is(err, os.ErrNotExist) {
-		fmt.Printf("no running daemon (no lock file at %s)\n", lockPath)
+		if !quietMode {
+			fmt.Printf("no running daemon (no lock file at %s)\n", lockPath)
+		}
 		emitStopHint()
 		return
 	}
@@ -65,19 +67,25 @@ func handleStop(_ context.Context, cfg config.Config, args []string) {
 	// detect "process is gone" via the Signal call.
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
 		if errors.Is(err, syscall.ESRCH) {
-			fmt.Printf("daemon already gone (pid %d not found; lock file is stale and can be removed)\n", pid)
+			if !quietMode {
+				fmt.Printf("daemon already gone (pid %d not found; lock file is stale and can be removed)\n", pid)
+			}
 			return
 		}
 		fatal(fmt.Errorf("SIGTERM pid %d: %w", pid, err))
 	}
-	fmt.Printf("sent SIGTERM to pid %d, waiting up to %s for shutdown...\n", pid, timeout.String())
+	if !quietMode {
+		fmt.Printf("sent SIGTERM to pid %d, waiting up to %s for shutdown...\n", pid, timeout.String())
+	}
 
 	// Poll for lock file removal. The daemon's fileLock.Release deletes
 	// the file on graceful exit, so this is a robust readiness check.
 	deadline := time.Now().Add(*timeout)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(lockPath); errors.Is(err, os.ErrNotExist) {
-			fmt.Println("daemon stopped cleanly")
+			if !quietMode {
+				fmt.Println("daemon stopped cleanly")
+			}
 			emitStopHint()
 			return
 		}
