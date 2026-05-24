@@ -4,7 +4,7 @@
 .\"
 .\" Source of truth for the program: src/cmd/sharedwatch/main.go
 .\" When commands or flags change, update this file in the same PR.
-.TH SHAREDWATCH 1 "2026-05-24" "v0.0.7" "User Commands"
+.TH SHAREDWATCH 1 "2026-05-24" "v0.0.8" "User Commands"
 .SH NAME
 sharedwatch \- calm, pull-based activity journal for a local shared folder
 .SH SYNOPSIS
@@ -164,7 +164,10 @@ Repeatable.
 Override the SQLite DB path.
 .TP
 .BR --data-dir " " \fIdir\fR
-Override the data directory.
+Override the data directory. Umbrella semantics: when set,
+\fIwatch_path\fR defaults to \fIdir/watch\fR and \fIdb_path\fR defaults
+to \fIdir/queue.db\fR unless explicitly overridden by \fB--watch-path\fR /
+\fB--db\fR / their config-file entries. (SW-AGENT-21.)
 .TP
 .BR --ignore " " \fIpattern\fR
 Extra ignore pattern. Repeatable, comma-aware. Appended to the default list.

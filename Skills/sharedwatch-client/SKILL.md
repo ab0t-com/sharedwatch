@@ -80,16 +80,12 @@ sharedwatch config show
 #    silently drops the trailing flag. Use `sharedwatch sql --format jsonl "..."`
 #    OR set SHAREDWATCH_FORMAT=jsonl once and forget the flag entirely.
 #
-# 2. --data-dir alone does NOT move watch_path/db_path. They stay at XDG
-#    defaults, giving you a split install. Prefer `XDG_DATA_HOME=/tmp/X`
-#    (single override) or pass --data-dir/--watch-path/--db as a trio.
-#
-# 3. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
+# 2. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
 #    real file changes the watcher picks up, NOT on `test emit`. To
 #    exercise the lease path, write a file to the watched dir and let
 #    the watcher detect it; `test emit` skips the lease check.
 #
-# 4. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
+# 3. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
 #    Older docs may show `acquire`; the binary only accepts grant/release/
 #    renew/list.
 

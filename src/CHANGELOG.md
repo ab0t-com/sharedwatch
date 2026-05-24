@@ -4,6 +4,11 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Changed — `--data-dir <X>` now re-derives `--watch-path` + `--db` defaults (SW-AGENT-21)
+- The umbrella semantics that match the existing on-disk shape (one tree under `data_dir/` with `watch/`, `queue.db`, `sharedwatch.lock`, ...). Previously, `--data-dir` set only `cfg.DataDir` and left `watch_path` + `db_path` at their `$XDG_DATA_HOME`-derived defaults, silently splitting the install. Now: `--data-dir <X>` also sets `WatchPath = X/watch` and `DBPath = X/queue.db` *when those weren't explicitly set* via flag, env, or config. Explicit flag / config still wins.
+- Matches conventions of other umbrella-shaped CLIs: `docker --root-dir`, older `helm --home`, `git --git-dir`, `homebrew prefix`, `pyenv root`.
+- Surfaced by [SW-AGENT-20](../tickets/ticket-fatalJSON-expansion-dogfood-self-improvement-20260524_053824.md) dogfood scenario 21; "Known gotchas" bullet about needing to pass three flags together (or use `XDG_DATA_HOME`) is removed from `docs/agent/agent-system-prompt-20260522.md` and `Skills/sharedwatch-client/SKILL.md` accordingly.
+
 ### Added — `fatalJSON` extended to all format-aware handlers (SW-AGENT-20)
 - `events stats`, `sql`, `schema`, `overview` now emit JSON-structured errors on stdout when `--format json|jsonl` is set, matching `events list`'s behaviour from v0.0.6. Consumers reading the JSON envelope no longer have to multiplex stderr to get the error.
 - Same canonical error-code vocabulary (`bad_flag` / `not_found` / `permission` / `db_error` / `network_error` / `internal`).

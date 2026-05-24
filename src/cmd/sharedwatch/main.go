@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -117,6 +118,10 @@ func main() {
 	}
 
 	cfg := config.Default()
+	// Snapshot the built-in defaults before any layered overrides — used
+	// below to detect "user/config didn't touch this path" so the
+	// --data-dir umbrella can re-derive only when safe. SW-AGENT-21.
+	defaults := cfg
 	configSearch = config.SearchConfig(*configPath)
 	if configSearch.LoadedPath != "" {
 		if loaded, err := config.Load(configSearch.LoadedPath, cfg); err != nil {
@@ -154,11 +159,26 @@ func main() {
 			cfg.WatchPath = "" // multi-root supersedes legacy single-path field
 		}
 	}
-	if *dbPath != "" {
-		cfg.DBPath = *dbPath
-	}
+	// SW-AGENT-21: --data-dir is an umbrella. When the user gives us a new
+	// data dir and HASN'T explicitly chosen a watch_path / db_path through
+	// flags, env, or config, derive them under the new umbrella so the
+	// install doesn't split across two trees. Explicit choices still win.
+	//
+	// "Hasn't explicitly chosen" is detected by comparing the current cfg
+	// values against the built-in defaults captured above. config-file and
+	// env both flow into cfg before this point, so if either set the path,
+	// cfg.X differs from defaults.X and we leave it alone.
 	if *dataDir != "" {
 		cfg.DataDir = *dataDir
+		if len(watchPaths) == 0 && len(rootDefs) == 0 && cfg.WatchPath == defaults.WatchPath {
+			cfg.WatchPath = filepath.Join(*dataDir, "watch")
+		}
+		if *dbPath == "" && cfg.DBPath == defaults.DBPath {
+			cfg.DBPath = filepath.Join(*dataDir, "queue.db")
+		}
+	}
+	if *dbPath != "" {
+		cfg.DBPath = *dbPath
 	}
 	if len(extraIgnores) > 0 {
 		cfg.IgnorePatterns = append(cfg.IgnorePatterns, extraIgnores...)
@@ -1475,6 +1495,11 @@ DEFAULT PATHS (when --watch-path / --db / --data-dir are not set)
   config     = ./config.yaml THEN $XDG_CONFIG_HOME/sharedwatch/config.yaml
                (both optional; first found wins; --config <path> overrides search)
   Run 'sharedwatch init' once to materialise these and print the resolved paths.
+
+  Umbrella semantics: passing --data-dir <X> alone also defaults
+    watch_path = X/watch
+    db_path    = X/queue.db
+  unless --watch-path / --db are explicitly set. Matches XDG_DATA_HOME=<X>.
 
 ENV VARS (set once at session start; flag > env > config > built-in)
   SHAREDWATCH_ACTOR          stable id of the writer (payload_json.actor)

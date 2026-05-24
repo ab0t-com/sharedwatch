@@ -441,7 +441,6 @@ A well-tuned agent should burn fewer than 2000 tokens per session on sharedwatch
 Three behaviours an agent will encounter that don't match naive intuition. From [`../dogfood/test_dogfood.md`](../dogfood/test_dogfood.md) scenarios 21–24 (v0.0.7):
 
 - **`--format` must appear *before* any positional argument.** Go's stdlib `flag` parser stops at the first non-flag. `sharedwatch sql "SELECT ..." --format jsonl` parses as `sql "SELECT ..."` and silently drops the trailing `--format`. Use `sharedwatch sql --format jsonl "SELECT ..."` OR set `SHAREDWATCH_FORMAT=jsonl` once at session start and never type the flag.
-- **`--data-dir` alone doesn't move the watched folder or the DB.** If you pass `--data-dir /tmp/X` without also passing `--watch-path` and `--db`, the watch_path + db_path stay at their XDG defaults — you'll have a split installation. Use `XDG_DATA_HOME=/tmp/X` instead (single point of override), or pass all three flags together.
 - **Lease violation warnings fire only on watcher-detected events, NOT on `test emit`.** The warning lives in the watcher's diff-and-insert loop; `test emit` is a direct synthetic insert that bypasses it. To exercise the lease-warning path, write a real file to the watched directory and let the watcher detect it. `test emit` is fine for everything else (attribution payloads, cursor reads, etc.).
 
 ### Companion docs the agent may also need
