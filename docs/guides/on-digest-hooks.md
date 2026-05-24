@@ -85,6 +85,8 @@ A single JSON object, byte-for-byte identical to `digest show <id> --json`:
 
 `format_version: 1` is the envelope contract — bump means a breaking shape change, so guard parsers with it.
 
+**Single-root daemons OMIT `watch_root`.** When `sharedwatch` is configured with a single watch path (no `--root <label>=<path>` setup), the `watch_root` key is left out of the payload entirely (Go's `omitempty`). Multi-root setups always include it. Write your jq recipes defensively: `jq -r '.watch_root // "(default)"'`.
+
 ### 4.2 Environment
 
 The hook process inherits the daemon's environment unchanged. **No `SW_*` variables are auto-injected** — extract everything you need from the stdin JSON via `jq` or your scripting language of choice.

@@ -213,8 +213,11 @@ type effectiveConfigJSON struct {
 	// SW-AGENT-29 (Phase 3): --on-digest hook config surfaced for
 	// `config show --json` / `config show` so operators can confirm
 	// the daemon picked up their flag/env/file setting before relying
-	// on it.
-	OnDigest        string `json:"on_digest,omitempty"`
+	// on it. on_digest is intentionally NOT omitempty (audit H8-B
+	// caught the asymmetry) — empty string renders as `""` so
+	// downstream tooling can distinguish "unset" from "key missing"
+	// without having to special-case it.
+	OnDigest        string `json:"on_digest"`
 	OnDigestTimeout string `json:"on_digest_timeout"`
 }
 

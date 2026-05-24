@@ -505,14 +505,64 @@ func handleDigest(ctx context.Context, a *app.App, args []string) {
 			Profile: resolveHintsProfile(false), RecentDigests: recent,
 		}))
 	case "show":
-		if len(args) < 2 {
-			fatal(fmt.Errorf("usage: sharedwatch digest show <id>"))
+		// SW-AGENT-29 audit X-A: `digest show <id> --json` was previously
+		// silently ignored (no flagset; the --json flag fell into args[1]
+		// as a positional). Without this, the design doc claim "hook stdin
+		// mirrors digest show --json shape" was a lie — the shape didn't
+		// exist. Now both `--json` (bool alias) and `--format json|text`
+		// work, mirroring the SW-AGENT-25 pattern across the other
+		// list-style endpoints.
+		fs := flag.NewFlagSet("digest show", flag.ExitOnError)
+		formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
+		asJSON := fs.Bool("json", false, "alias for --format json (SW-AGENT-29 audit X-A)")
+		// digest show takes a positional <id>; treat the first non-flag
+		// arg as the id, parse the rest as flags.
+		var id string
+		rest := args[1:]
+		if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+			id = rest[0]
+			rest = rest[1:]
 		}
-		d, err := a.GetDigest(ctx, args[1])
+		_ = fs.Parse(rest)
+		if id == "" {
+			fatal(fmt.Errorf("usage: sharedwatch digest show <id> [--json | --format text|json]"))
+		}
+		format := resolveFormat(*formatFlag, *asJSON, "json")
+		d, err := a.GetDigest(ctx, id)
 		if err != nil {
 			fatal(err)
 		}
-		_ = a.Store.MarkDigestRead(ctx, args[1])
+		_ = a.Store.MarkDigestRead(ctx, id)
+		if strings.EqualFold(format, "json") {
+			// Shape matches the hook stdin payload (FireHookAsync in
+			// app.go) so jq recipes generalise across both surfaces.
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			_ = enc.Encode(struct {
+				FormatVersion int       `json:"format_version"`
+				ID            string    `json:"id"`
+				CreatedAt     time.Time `json:"created_at"`
+				WindowStart   time.Time `json:"window_start"`
+				WindowEnd     time.Time `json:"window_end"`
+				Mode          string    `json:"mode"`
+				EventCount    int       `json:"event_count"`
+				Summary       string    `json:"summary"`
+				Status        string    `json:"status"`
+				WatchRoot     string    `json:"watch_root,omitempty"`
+			}{
+				FormatVersion: 1,
+				ID:            d.ID,
+				CreatedAt:     d.CreatedAt,
+				WindowStart:   d.WindowStart,
+				WindowEnd:     d.WindowEnd,
+				Mode:          d.Mode,
+				EventCount:    d.EventCount,
+				Summary:       d.Summary,
+				Status:        string(d.Status),
+				WatchRoot:     d.WatchRoot,
+			})
+			return
+		}
 		fmt.Printf("id=%s\ncreated_at=%s\nwindow=%s..%s\nmode=%s\nevents=%d\nstatus=%s\nsummary=\n%s\n",
 			d.ID, d.CreatedAt.Format(time.RFC3339), d.WindowStart.Format(time.RFC3339), d.WindowEnd.Format(time.RFC3339),
 			d.Mode, d.EventCount, d.Status, d.Summary)
