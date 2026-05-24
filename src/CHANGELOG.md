@@ -4,6 +4,16 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — dogfood scenarios 27/28/29 (v0.0.8 dogfood)
+- Scenarios 27 (update lifecycle), 28 (cursor management surface), 29 (empty-journal grace) added to `docs/dogfood/test_dogfood.md`. Each run end-to-end against the deployed v0.0.8 binary.
+- **Net findings:** 1 code bug (none), 1 documented behaviour (see below), 1 scenario-text fix (cursor encode syntax — my own scenario was wrong, fixed). v0.0.8 is solid across these three axes (update lifecycle + cursor management + empty-state grace).
+
+### Documented — `sharedwatch update` dry-run doesn't validate target existence (dogfood scenario 27)
+- Surfaced by scenario 27: `sharedwatch update --version v9.9.9` (a nonexistent tag) prints the same DRY RUN plan as a real target version. The 404 only fires when the user passes `--apply`. So a clean dry-run is NOT proof the target version is real.
+- This is by design (dry-run prints the resolved URL but doesn't perform any I/O), but non-obvious enough that an agent could be misled by a clean dry-run into running `--apply` on a phantom version.
+- Documented as a known gotcha in `docs/agent/agent-system-prompt-20260522.md` and `Skills/sharedwatch-client/SKILL.md` (gotcha block).
+- Optional follow-up (not filed): add HEAD-validation of the target manifest during dry-run, or include a `(target not verified — only confirmed on --apply)` line in dry-run output.
+
 ### Added — portable self-improvement-loop agent prompt + dogfood scenarios 25-26
 - New file `prompts/self-improvement-loop-agent-prompt.md` — portable, project-agnostic version of the dogfood-driven self-improvement loop, paste-able into other CLIs / daemons / libraries. Wraps the workflow that produced 5 bug fixes + 1 doc-drift across SW-AGENT-20 and SW-AGENT-21. (183 lines.)
 - New dogfood scenarios 25 (full precedence chain config→env→flag) and 26 (multi-root × --data-dir umbrella interaction) added to `docs/dogfood/test_dogfood.md`. Run against the deployed v0.0.8 binary; 26 passes; 25 surfaced one **non-obvious behaviour** (see below).

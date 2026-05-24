@@ -115,6 +115,9 @@ safe_clear_files && $SW reconcile now    # baseline before next scenario
 | 24 | Multi-agent lease warning (v0.0.7) | Watcher logs structured warning on cross-actor writes inside a lease |
 | 25 | Full precedence chain: config → env → flag (v0.0.8 dogfood) | Resolution-order regression for SW-AGENT-18 |
 | 26 | Multi-root + --data-dir umbrella (v0.0.8 dogfood) | SW-AGENT-3 × SW-AGENT-21 interaction |
+| 27 | `sharedwatch update` end-to-end (v0.0.8 dogfood) | Self-update lifecycle: dry-run, version pin, same-version, missing |
+| 28 | `events cursor` management lifecycle (v0.0.8 dogfood) | All 5 cursor subcommands; encode/decode round-trip |
+| 29 | Empty-journal grace (v0.0.8 dogfood) | Every command on a fresh init with zero events |
 
 ---
 
@@ -1037,3 +1040,144 @@ ls "$DOG/queue.db"
 **Pass criteria:** (a) data_dir + db_path correct under umbrella; (b) both roots shown; (d) DB at umbrella location.
 
 **Recorded run:** see worklog.
+
+---
+
+## 27 — `sharedwatch update` end-to-end (v0.0.8 dogfood)
+
+**Goal:** verify the self-update flow against the LIVE in-repo release tree. Dry-run shape; pin to a specific version; same-version exit.
+
+**Setup:**
+```bash
+# Use the deployed binary (curl-installed v0.0.8).
+SW=$HOME/.local/bin/sharedwatch
+```
+
+**Actions + expected:**
+
+```bash
+# (a) Dry-run with no args: resolves latest, shows plan, exits 0 with no changes.
+$SW update
+# Expected: "current version: v0.0.8 / target version: v0.0.X / ...
+#   DRY RUN — no changes made. To apply: sharedwatch update --apply"
+
+# (b) Pin to a known prior version — confirms --version flag works and dry-run shape.
+$SW update --version v0.0.7
+# Expected: same shape, target = v0.0.7, DRY RUN, no changes.
+
+# (c) Pin to CURRENT version → "already on" path.
+$SW update --version v0.0.8
+# Expected: "already on v0.0.8 — no update needed"
+
+# (d) Non-existent version → network 404, clean exit non-zero.
+$SW update --version v9.9.9 2>&1; echo "exit=$?"
+# Expected: error mentioning download failure; exit 1 (not a crash).
+```
+
+**What this exercises:** `sharedwatch update`'s dry-run safety (default; no --apply); version pin; "already on" detection (skips the download); error handling for nonexistent versions.
+
+**Pass criteria:** (a) shows plan, no install; (b) shows older version's plan; (c) reports already-on; (d) errors cleanly with exit 1.
+
+**Recorded run:** see this scenario's worklog summary below.
+
+---
+
+## 28 — `events cursor` management lifecycle (v0.0.8 dogfood)
+
+**Goal:** exercise the 5 cursor subcommands (`list`, `set`, `reset`, `encode`, `decode`) which are rarely-touched but documented. An agent managing multiple cursors should be able to round-trip through this surface without surprise.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-28
+rm -rf "$DOG" && mkdir -p "$DOG"
+$SW --data-dir "$DOG" init >/dev/null
+# Generate 5 events to have something to position cursors against.
+for i in 1 2 3 4 5; do
+  $SW --data-dir "$DOG" --actor demo test emit "e${i}.md" >/dev/null
+done
+```
+
+**Actions + expected:**
+
+```bash
+# (a) cursor list on a fresh DB → no cursors yet
+$SW --data-dir "$DOG" events cursor list
+# Expected: empty list / message saying no cursors
+
+# (b) Implicit create: a cursor-name read creates the cursor
+$SW --data-dir "$DOG" events list --cursor-name agent-a --limit 2 --format jsonl > /dev/null
+$SW --data-dir "$DOG" events cursor list
+# Expected: agent-a listed with its current position
+
+# (c) Reset → next read starts from oldest again
+$SW --data-dir "$DOG" events cursor reset agent-a
+$SW --data-dir "$DOG" events cursor list
+# Expected: agent-a removed OR position cleared
+
+# (d) Encode then decode a cursor token round-trip
+TOK=$($SW --data-dir "$DOG" events cursor encode 2026-05-24T00:00:00Z evt_test 2>&1)
+echo "TOK=$TOK"
+$SW --data-dir "$DOG" events cursor decode "$TOK" 2>&1
+# Expected: decode returns the same timestamp + id; round-trip works
+```
+
+**What this exercises:** the full `events cursor` surface; encode/decode round-trip; implicit cursor creation; reset semantics.
+
+**Pass criteria:** all 4 commands run; encode-decode round-trips; reset removes or zeroes the cursor.
+
+**Recorded run:** see this scenario's worklog summary below.
+
+---
+
+## 29 — Empty-journal grace (v0.0.8 dogfood)
+
+**Goal:** verify every command behaves gracefully on a freshly-initialised journal with zero events. No crashes, friendly messages, no nil-deref panics, exit codes sensible.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-29
+rm -rf "$DOG" && mkdir -p "$DOG"
+$SW --data-dir "$DOG" init >/dev/null
+```
+
+**Actions + expected:**
+
+```bash
+# (a) status — should report all-zero counts, no errors
+$SW --data-dir "$DOG" status
+# Expected: pending=0, no last_event, exit 0
+
+# (b) roots — shows the default root with 0 pending
+$SW --data-dir "$DOG" roots
+# Expected: single row, (default) label, pending=0
+
+# (c) events list — empty result; exit 0 (NOT 1)
+$SW --data-dir "$DOG" events list --format jsonl; echo "exit=$?"
+# Expected: zero output rows; exit 0
+
+# (d) digest list — friendly "no digests yet" message
+$SW --data-dir "$DOG" digest list
+
+# (e) overview — JSON envelope with zero counts, no crash
+$SW --data-dir "$DOG" overview --format json | jq '{events_in_range, pending, failed}'
+# Expected: all 0
+
+# (f) events stats — requires --root; with bogus root → JSON error envelope
+$SW --data-dir "$DOG" events stats --format jsonl 2>&1 | head -10
+
+# (g) schema on the fresh DB — returns the table DDL (DB IS populated even when journal empty)
+$SW --data-dir "$DOG" schema --format json | jq 'length'
+# Expected: integer > 0 (tables exist; journal rows = 0 is separate)
+
+# (h) consume on empty → friendly message, exit 0
+$SW --data-dir "$DOG" consume
+
+# (i) stop on no-daemon → friendly
+$SW --data-dir "$DOG" stop
+```
+
+**What this exercises:** every read/write surface on a brand-new install. Catches nil-dereferences, off-by-one zero handling, accidentally-required-state assumptions.
+
+**Pass criteria:** every command exits 0 (except (f) which is an intentional bad-flag); no crash; outputs are friendly + structured-correct.
+
+**Recorded run:** see this scenario's worklog summary below.

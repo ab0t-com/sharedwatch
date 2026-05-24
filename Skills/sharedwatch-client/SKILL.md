@@ -86,12 +86,17 @@ sharedwatch config show
 #    the flag wins for behaviour. Don't use `config show` to verify
 #    what flags are doing — only what config + env are doing.
 #
-# 3. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
+# 3. `sharedwatch update` dry-run doesn't validate that the target
+#    version actually exists. `--version v9.9.9` (nonexistent) prints
+#    the same DRY RUN plan as a real version; the 404 only fires on
+#    --apply. A clean dry-run is NOT proof the target is real.
+#
+# 4. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
 #    real file changes the watcher picks up, NOT on `test emit`. To
 #    exercise the lease path, write a file to the watched dir and let
 #    the watcher detect it; `test emit` skips the lease check.
 #
-# 4. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
+# 5. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
 #    Older docs may show `acquire`; the binary only accepts grant/release/
 #    renew/list.
 
