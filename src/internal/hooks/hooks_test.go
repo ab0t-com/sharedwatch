@@ -2,10 +2,32 @@ package hooks
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"sharedwatch/internal/digest"
+	"sharedwatch/internal/events"
 )
+
+// fakeEmitter records every InsertEvent call so tests can inspect
+// what the hook subsystem wrote into the journal without standing up
+// a real SQLite store.
+type fakeEmitter struct {
+	events []events.Event
+	failOn bool
+}
+
+func (f *fakeEmitter) InsertEvent(ctx context.Context, e events.Event) error {
+	if f.failOn {
+		return context.Canceled // arbitrary non-nil
+	}
+	f.events = append(f.events, e)
+	return nil
+}
 
 // TestRunHookEmptyCommand — empty string short-circuits, no subprocess.
 func TestRunHookEmptyCommand(t *testing.T) {
@@ -149,5 +171,268 @@ func TestRunHookDefaultTimeout(t *testing.T) {
 	res := RunHook(context.Background(), `{}`, "true", 0)
 	if res.Reason != ReasonSuccess {
 		t.Fatalf("expected success with default timeout, got %s", res.Reason)
+	}
+}
+
+// --- Phase 2 — sidecar capture + meta-event emission ---
+
+// TestRunHookWithSidecarCreatesFiles — when sidecarDir + digestID are
+// supplied, the function MUST tee stdout/stderr to files named
+// <digestID>.out and <digestID>.err under the dir.
+func TestRunHookWithSidecarCreatesFiles(t *testing.T) {
+	dir := t.TempDir()
+	digestID := "dig_abc123"
+	res := RunHookWithSidecar(context.Background(), `{"id":"dig_abc123"}`,
+		"echo hello && echo oops 1>&2", 5*time.Second, dir, digestID)
+
+	if res.Reason != ReasonSuccess {
+		t.Fatalf("expected success, got %s (stderr=%q)", res.Reason, string(res.Stderr))
+	}
+	if res.StdoutPath != filepath.Join(dir, digestID+".out") {
+		t.Fatalf("unexpected StdoutPath: %q", res.StdoutPath)
+	}
+	if res.StderrPath != filepath.Join(dir, digestID+".err") {
+		t.Fatalf("unexpected StderrPath: %q", res.StderrPath)
+	}
+	// File contents must match what we captured in memory.
+	out, err := os.ReadFile(res.StdoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != string(res.Stdout) {
+		t.Fatalf("stdout file vs memory mismatch:\n  file: %q\n  mem:  %q", string(out), string(res.Stdout))
+	}
+	errBytes, err := os.ReadFile(res.StderrPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(errBytes) != string(res.Stderr) {
+		t.Fatalf("stderr file vs memory mismatch")
+	}
+	// Sizes must match too.
+	if res.StdoutBytes != int64(len(res.Stdout)) {
+		t.Fatalf("StdoutBytes mismatch: field=%d, len=%d", res.StdoutBytes, len(res.Stdout))
+	}
+	if res.StderrBytes != int64(len(res.Stderr)) {
+		t.Fatalf("StderrBytes mismatch")
+	}
+}
+
+// TestRunHookWithSidecarEmptyDirSkipsFiles — when sidecarDir is empty
+// (the production "user didn't set --on-digest" path), no files are
+// written and the paths remain empty.
+func TestRunHookWithSidecarEmptyDirSkipsFiles(t *testing.T) {
+	res := RunHookWithSidecar(context.Background(), `{}`, "echo x", 5*time.Second, "", "dig_x")
+	if res.Reason != ReasonSuccess {
+		t.Fatalf("expected success, got %s", res.Reason)
+	}
+	if res.StdoutPath != "" || res.StderrPath != "" {
+		t.Fatalf("expected empty sidecar paths, got %q / %q", res.StdoutPath, res.StderrPath)
+	}
+	// But in-memory capture still works.
+	if !strings.Contains(string(res.Stdout), "x") {
+		t.Fatalf("expected stdout 'x', got %q", string(res.Stdout))
+	}
+}
+
+// TestRunHookWithSidecarNonExistentDirCreates — sidecar dir is auto-
+// created if missing (MkdirAll). The consumer call site can pass a
+// path that doesn't yet exist on first run.
+func TestRunHookWithSidecarNonExistentDirCreates(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "nested", "hooks")
+	res := RunHookWithSidecar(context.Background(), `{}`, "echo created", 5*time.Second, dir, "dig_new")
+	if res.Reason != ReasonSuccess {
+		t.Fatalf("expected success, got %s", res.Reason)
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("expected sidecar dir to be created: %v", err)
+	}
+}
+
+// TestRunHookWithSidecarLargeOutput — file capture handles output
+// larger than a typical pipe buffer (64KB+). Verifies the io.MultiWriter
+// streaming path doesn't deadlock on big outputs.
+func TestRunHookWithSidecarLargeOutput(t *testing.T) {
+	dir := t.TempDir()
+	// Generate ~256KB of stdout.
+	res := RunHookWithSidecar(context.Background(), `{}`,
+		"yes hello | head -c 262144", 10*time.Second, dir, "dig_big")
+	if res.Reason != ReasonSuccess {
+		t.Fatalf("expected success, got %s", res.Reason)
+	}
+	if res.StdoutBytes < 250000 {
+		t.Fatalf("expected ~256KB of stdout, got %d bytes", res.StdoutBytes)
+	}
+	stat, err := os.Stat(res.StdoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stat.Size() != res.StdoutBytes {
+		t.Fatalf("file size (%d) != StdoutBytes (%d)", stat.Size(), res.StdoutBytes)
+	}
+}
+
+// TestEmitMetaEventSuccess — a successful hook emits hook.completed
+// with the right payload shape.
+func TestEmitMetaEventSuccess(t *testing.T) {
+	em := &fakeEmitter{}
+	res := Result{
+		Command:     "echo ok",
+		Reason:      ReasonSuccess,
+		ExitCode:    0,
+		Duration:    123 * time.Millisecond,
+		StdoutBytes: 3,
+		StderrBytes: 0,
+		StdoutPath:  "/var/.../hooks/dig_x.out",
+	}
+	d := digest.Digest{ID: "dig_x", WatchRoot: "code"}
+
+	id, err := EmitMetaEvent(context.Background(), em, res, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "" || !strings.HasPrefix(id, "evt_") {
+		t.Fatalf("expected evt_ id, got %q", id)
+	}
+	if len(em.events) != 1 {
+		t.Fatalf("expected 1 inserted event, got %d", len(em.events))
+	}
+	got := em.events[0]
+	if got.Type != events.TypeHookCompleted {
+		t.Fatalf("expected type hook.completed, got %s", got.Type)
+	}
+	if got.Source != events.SourceHook {
+		t.Fatalf("expected source hook, got %s", got.Source)
+	}
+	if got.Status != events.StatusProcessed {
+		t.Fatalf("expected status processed (terminal), got %s", got.Status)
+	}
+	if got.RelPath != "dig_x" {
+		t.Fatalf("expected rel_path=dig_x, got %q", got.RelPath)
+	}
+	if got.WatchRoot != "code" {
+		t.Fatalf("expected watch_root=code, got %q", got.WatchRoot)
+	}
+	// Payload shape check.
+	var p metaPayload
+	if err := json.Unmarshal([]byte(got.PayloadJSON), &p); err != nil {
+		t.Fatalf("payload not valid JSON: %v", err)
+	}
+	if p.SchemaVersion != 1 {
+		t.Fatalf("expected schema_version=1, got %d", p.SchemaVersion)
+	}
+	if p.HookCommand != "echo ok" {
+		t.Fatalf("expected hook_command=%q, got %q", "echo ok", p.HookCommand)
+	}
+	if p.DigestID != "dig_x" {
+		t.Fatalf("expected digest_id=dig_x, got %q", p.DigestID)
+	}
+	if p.ExitCode != 0 {
+		t.Fatalf("expected exit_code=0, got %d", p.ExitCode)
+	}
+	if p.DurationMS != 123 {
+		t.Fatalf("expected duration_ms=123, got %d", p.DurationMS)
+	}
+	if p.Reason != ReasonSuccess {
+		t.Fatalf("expected reason=success, got %s", p.Reason)
+	}
+}
+
+// TestEmitMetaEventFailure — any non-success reason emits hook.failed.
+// Use a timeout outcome to exercise the typical failure shape.
+func TestEmitMetaEventFailure(t *testing.T) {
+	em := &fakeEmitter{}
+	res := Result{
+		Command:  "sleep 99",
+		Reason:   ReasonTimeout,
+		ExitCode: -1,
+		Duration: 1 * time.Second,
+	}
+	d := digest.Digest{ID: "dig_t"}
+	_, err := EmitMetaEvent(context.Background(), em, res, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if em.events[0].Type != events.TypeHookFailed {
+		t.Fatalf("expected hook.failed, got %s", em.events[0].Type)
+	}
+	var p metaPayload
+	_ = json.Unmarshal([]byte(em.events[0].PayloadJSON), &p)
+	if p.Reason != ReasonTimeout {
+		t.Fatalf("expected reason=timeout, got %s", p.Reason)
+	}
+}
+
+// TestEmitMetaEventEmptySkips — ReasonEmpty means RunHook was a no-op.
+// No meta-event should be written.
+func TestEmitMetaEventEmptySkips(t *testing.T) {
+	em := &fakeEmitter{}
+	res := Result{Reason: ReasonEmpty}
+	id, err := EmitMetaEvent(context.Background(), em, res, digest.Digest{ID: "dig_e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "" {
+		t.Fatalf("expected empty id for empty reason, got %q", id)
+	}
+	if len(em.events) != 0 {
+		t.Fatalf("expected no event inserted, got %d", len(em.events))
+	}
+}
+
+// TestEmitMetaEventStoreErrorBubbles — when the store insert fails,
+// EmitMetaEvent surfaces the error so callers can log it. (Production
+// call site in Phase 4 will log-and-continue; the hook outcome itself
+// must never block digest creation.)
+func TestEmitMetaEventStoreErrorBubbles(t *testing.T) {
+	em := &fakeEmitter{failOn: true}
+	res := Result{Command: "true", Reason: ReasonSuccess}
+	_, err := EmitMetaEvent(context.Background(), em, res, digest.Digest{ID: "dig_z"})
+	if err == nil {
+		t.Fatal("expected error when store insert fails")
+	}
+}
+
+// TestRunHookEndToEndWithSidecarAndMetaEvent — the canonical Phase 2
+// happy path: real subprocess → sidecar files → meta-event in the
+// (fake) journal. Sizes in the meta-event payload must match the
+// actual on-disk sidecar file sizes.
+func TestRunHookEndToEndWithSidecarAndMetaEvent(t *testing.T) {
+	dir := t.TempDir()
+	digestID := "dig_e2e"
+	d := digest.Digest{ID: digestID, WatchRoot: "code"}
+
+	res := RunHookWithSidecar(context.Background(),
+		`{"id":"`+digestID+`","summary":"e2e"}`,
+		"echo OK && echo problem 1>&2",
+		5*time.Second, dir, digestID)
+	if res.Reason != ReasonSuccess {
+		t.Fatalf("expected success, got %s", res.Reason)
+	}
+
+	em := &fakeEmitter{}
+	_, err := EmitMetaEvent(context.Background(), em, res, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(em.events) != 1 {
+		t.Fatalf("expected 1 meta-event, got %d", len(em.events))
+	}
+
+	var p metaPayload
+	_ = json.Unmarshal([]byte(em.events[0].PayloadJSON), &p)
+
+	// On-disk file sizes must equal what the meta-event advertises.
+	outStat, _ := os.Stat(res.StdoutPath)
+	errStat, _ := os.Stat(res.StderrPath)
+	if p.StdoutBytes != outStat.Size() {
+		t.Fatalf("meta StdoutBytes=%d but file is %d", p.StdoutBytes, outStat.Size())
+	}
+	if p.StderrBytes != errStat.Size() {
+		t.Fatalf("meta StderrBytes=%d but file is %d", p.StderrBytes, errStat.Size())
+	}
+	if p.StdoutPath != res.StdoutPath {
+		t.Fatalf("meta StdoutPath=%q != res.StdoutPath=%q", p.StdoutPath, res.StdoutPath)
 	}
 }

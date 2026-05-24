@@ -13,6 +13,14 @@ const (
 	TypeModified Type = "file.modified"
 	TypeDeleted  Type = "file.deleted"
 	TypeRenamed  Type = "file.renamed"
+
+	// SW-AGENT-29 (v0.1.0): meta-event types emitted by the --on-digest
+	// hook subsystem. Every hook run produces exactly one meta-event so
+	// hook activity is first-class in the journal — agents can query
+	// `events list --type hook.completed --type hook.failed` to inspect
+	// hook history without leaving the events surface.
+	TypeHookCompleted Type = "hook.completed"
+	TypeHookFailed    Type = "hook.failed"
 )
 
 const (
@@ -27,6 +35,11 @@ const (
 	SourceWatcher    Source = "watcher"
 	SourceReconciler Source = "reconciler"
 	SourceTest       Source = "test"
+	// SW-AGENT-29: meta-events from the --on-digest hook subsystem
+	// stamp source=hook so they're easy to filter out of file-event
+	// queries (`events list --source watcher,reconciler,test` excludes
+	// hook noise).
+	SourceHook Source = "hook"
 )
 
 type Event struct {
