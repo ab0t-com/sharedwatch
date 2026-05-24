@@ -181,7 +181,7 @@ data_dir=/home/you/.local/share/sharedwatch</span>
 <span class="comment"># prints the full digest and marks it read</span></div>
 
   <h2 id="help">Full <code>--help</code> reference</h2>
-  <p class="annot">Verbatim output of <code>sharedwatch help</code> (v0.0.2 build).</p>
+  <p class="annot">Approximate output of <code>sharedwatch help</code> on a v0.0.5 build. The live help is the source of truth — run <code>sharedwatch help</code> for the up-to-date version.</p>
   <div class="terminal"><span class="out">sharedwatch — calm collaboration bus for a local shared folder
 
 USAGE
@@ -458,21 +458,21 @@ dgs_177956...  2026-05-23T23:40:00Z events=3  status=read    Shared drive digest
   <p><strong>The <code>update</code> command is safe by default.</strong> Running it bare prints what <em>would</em> change and exits. Pass <code>--apply</code> to actually install.</p>
 
   <div class="terminal"><span class="prompt">$</span> sharedwatch update
-<span class="out">current version:  v0.0.2
-target version:   v0.0.3
+<span class="out">current version:  v0.0.4
+target version:   v0.0.5
 repo:             ab0t-com/sharedwatch
 platform:         linux_amd64
 binary path:      /home/you/.local/bin/sharedwatch
-download:         https://github.com/ab0t-com/sharedwatch/releases/download/v0.0.3/sharedwatch_0.0.3_linux_amd64.tar.gz
-manifest:         https://github.com/ab0t-com/sharedwatch/releases/download/v0.0.3/manifest.yaml
+download:         https://raw.githubusercontent.com/ab0t-com/sharedwatch/main/release/v0.0.5/sharedwatch_0.0.5_linux_amd64.tar.gz
+manifest:         https://raw.githubusercontent.com/ab0t-com/sharedwatch/main/release/v0.0.5/manifest.yaml
 
 DRY RUN — no changes made. To apply: sharedwatch update --apply</span>
 
 <span class="prompt">$</span> sharedwatch update --apply
-<span class="out">current version:  v0.0.2
-target version:   v0.0.3
+<span class="out">current version:  v0.0.4
+target version:   v0.0.5
 ...
-Replace /home/you/.local/bin/sharedwatch with v0.0.3 ? [y/N] y
+Replace /home/you/.local/bin/sharedwatch with v0.0.5 ? [y/N] y
 downloading manifest...
 downloading tarball (~few MB)...
 verifying SHA-256...
@@ -481,7 +481,7 @@ verifying SHA-256...
 extracting binary...
 smoke-testing new binary...
 
-installed v0.0.3 to /home/you/.local/bin/sharedwatch
+installed v0.0.5 to /home/you/.local/bin/sharedwatch
 if a daemon is running, restart it to pick up the new binary</span></div>
 
   <h3>What "safe" means here</h3>
@@ -494,7 +494,7 @@ if a daemon is running, restart it to pick up the new binary</span></div>
     <li><strong>Safe to run while the daemon is active.</strong> On POSIX, the running process holds the old inode. The new binary takes effect on next restart.</li>
     <li><strong>Touches nothing but the binary.</strong> No DB write, no config change, no watched-folder write.</li>
     <li><strong>Bounded network time.</strong> <code>--timeout 60s</code> by default.</li>
-    <li><strong>Pin a specific version.</strong> <code>--version v0.0.2</code> overrides "latest". Useful for rollback.</li>
+    <li><strong>Pin a specific version.</strong> <code>--version v0.0.4</code> overrides "latest". Useful for rollback.</li>
   </ul>
 
   <h2 id="architecture">How it works (architecture sketch)</h2>

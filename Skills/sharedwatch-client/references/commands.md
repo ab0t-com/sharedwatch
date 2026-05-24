@@ -1,19 +1,23 @@
 # sharedwatch — CLI reference (today's surface)
 
-Authoritative reference for the sharedwatch commands available as of v0.7.x. Cross-checks with the live binary via `sharedwatch help`. When in doubt, run `sharedwatch <subcommand> --help`.
+Authoritative reference for the sharedwatch commands available as of v0.0.5. Cross-checks with the live binary via `sharedwatch help`. When in doubt, run `sharedwatch <subcommand> --help`.
 
 ## Contents
-1. Global flags
-2. Lifecycle (`init`, `run`, `version`, `help`)
-3. Status (`status`, `mode`)
+1. Global flags + env vars (`SHAREDWATCH_*` resolution chain)
+2. Lifecycle (`init`, `run`, `stop`, `version`, `help`, `update`)
+3. Status + introspection (`status`, `roots`, `config show`, `mode`)
 4. Consumption (`consume`, `digest`)
-5. Event journal (`events list`, `events cursor`, `events retry`, `events recover-stuck`)
-6. Raw SQL (`sql`)
-7. Schema discovery (`schema`)
-8. Reconciliation (`reconcile`)
-9. Synthetic emission (`test emit`)
-10. Output formats
-11. Exit codes
+5. Event journal (`events list`, `events cursor`, `events retry`, `events recover-stuck`, `events stats`)
+6. Cross-root summary (`overview`)
+7. Cooperative coordination (`actor heartbeat`, `intent declare`, `lease acquire`)
+8. Raw SQL (`sql`)
+9. Schema discovery (`schema`)
+10. Reconciliation (`reconcile`)
+11. Synthetic emission (`test emit`)
+12. Output formats + smart hints (`next[]`)
+13. Exit codes
+
+> **Quick note for agents**: see the "Agent startup ritual" in [`../SKILL.md`](../SKILL.md) for the `export SHAREDWATCH_*` block that lets you skip identity flags on every command.
 
 ## 1. Global flags
 

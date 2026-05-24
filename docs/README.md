@@ -61,7 +61,7 @@ These are not docs about agents — they are docs *for* agents. The system promp
 | File | Date | What's in it |
 |---|---|---|
 | [`agent/agent-fit-20260520.md`](agent/agent-fit-20260520.md) | 2026-05-20 | Multi-agent fit analysis: which gaps in v0.7 block the multi-agent use case, scored. Drove the v0.8 roadmap. |
-| [`agent/agent-system-prompt-20260522.md`](agent/agent-system-prompt-20260522.md) | 2026-05-22 | The system prompt that ships to AI consumers — explains the journal, the patterns (HANDOFF / AUDIT / DOGFOOD), references the dogfood scenarios as canonical examples. Updated post-v0.8 ship. |
+| [`agent/agent-system-prompt-20260522.md`](agent/agent-system-prompt-20260522.md) | 2026-05-22 (refreshed v0.0.5) | The system prompt that ships to AI consumers — explains the journal, the patterns (HANDOFF / AUDIT / NEXT-FROM-OVERVIEW / DOGFOOD), the agent startup ritual (`export SHAREDWATCH_*` env vars), and references the dogfood scenarios as canonical examples. |
 
 ---
 

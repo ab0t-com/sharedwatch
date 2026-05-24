@@ -75,11 +75,10 @@ How to query — minimal vocabulary
 You only need to know FIVE commands:
 
   sharedwatch overview --format json
-    → L1: per-root counts, last_event_at, mode, active_actors, drill map.
-    Available as of v0.8.0. For older binaries fall back to:
-       sharedwatch status --json
-       sharedwatch sql "SELECT COUNT(*) FROM events
-                       WHERE created_at > datetime('now','-1 day')"
+    → L1: per-root counts, last_event_at, mode, active_actors,
+      next[] hints (pre-computed follow-up commands keyed by what they
+      answer). Shipped in v0.8.0; the next[] array replaced the v0.0.3
+      `drill` map in v0.0.4.
 
   sharedwatch events list \
     --root <label> \
@@ -206,18 +205,19 @@ orchestration system supports references.
          no response → fall back to a direct message via
          filesystem convention or escalate.
 
-(6) PATTERN: drill-from-overview
+(6) PATTERN: next-from-overview
     When the L1 overview shows activity you weren't expecting.
     Steps:
-      a. From overview, pick the root with most recent activity.
-      b. `sharedwatch events stats --root <X> --since 1h
-         --format json` (since v0.8.0)
-      c. Look at top_paths and top_actors. Is anything related to
-         your task?
-      d. If yes, drop to L4:
-         `sharedwatch events list --root <X> --path-glob '<P>'
-          --since 1h --format jsonl`
-      e. Stop drilling when you have enough information.
+      a. From overview, read the `next[]` array — every entry is a
+         ready-to-run command keyed by what it answers
+         (e.g. "actor_claude-x", "root_auth", "events_failed").
+      b. Pick the one that matches your investigation goal.
+      c. Run it directly; no command construction required.
+      d. Stop drilling when you have enough information.
+    The `next[]` array is the canonical replacement for the v0.0.3
+    `drill` map. Same conceptual purpose, uniform shape across every
+    command that emits hints (status, roots, digest list/show, events
+    stats, events list cursor, overview).
 
 (7) PATTERN: don't-step-on-toes (advisory, no enforcement)
     Before a non-trivial edit (rename, delete, big rewrite).
@@ -376,13 +376,31 @@ END OF SHAREDWATCH INSTRUCTIONS
 
 ## Notes for the orchestrator / prompt engineer
 
+### Agent startup ritual (v0.0.5)
+
+Once per shell session, export the agent's identity and preferences so subsequent commands don't have to repeat them:
+
+```bash
+export SHAREDWATCH_ACTOR=<your-stable-id>      # required to attribute anything
+export SHAREDWATCH_ACTOR_KIND=ai_agent
+export SHAREDWATCH_SESSION="sess-$(date +%Y-%m-%d)-$(uuidgen | head -c8)"
+export SHAREDWATCH_FORMAT=jsonl                # default --format
+export SHAREDWATCH_CURSOR_NAME=<your-stable-id># cursor mode by default
+export SHAREDWATCH_HINTS=agent                 # rich next[] hints on every command
+
+# Verify what the binary will use:
+sharedwatch config show          # prints effective config + env + searched files
+```
+
+Resolution chain: `flag > env > config.yaml > built-in default`. After the export, `sharedwatch events list` is equivalent to `sharedwatch --cursor-name <id> events list --format jsonl --hints agent` — every command auto-applies the agent's identity and preferences.
+
 ### Why this shape
 
 - **Five commands at the core.** An agent that knows `overview`, `events list`, `events list --cursor-name`, `schema`, and `sql` can handle everything. Five is the upper bound on how many distinct tools an LLM reliably picks between without confusion. Don't add a sixth without taking one away.
 
 - **Patterns are named.** "PATTERN: peer-handoff-check" is referenced like an API. If your orchestration system tracks named patterns, they'll appear in traces and become debuggable.
 
-- **All commands referenced shipped in v0.8.0** (`overview`, `events stats`, `lease grant/release/list/renew`, `intent declare/list/revoke`, `status --actors`, `actor heartbeat`). For older binaries, the prompt names the v0.7 fallback inline where relevant.
+- **All commands referenced have shipped** through v0.0.5. The major adds since v0.8.0: `roots` (v0.0.3 — list watched folders), `update` (v0.0.3 — self-update with SHA-256 verify), smart hints / `next[]` envelope key (v0.0.4 — replaces v0.0.3's `drill` map), `config show` + `stop` (v0.0.5 — introspection + lifecycle), env-var resolution layer (v0.0.5 — `SHAREDWATCH_*` for agent identity defaults).
 
 - **Self-introspection is built in.** The "ask yourself before/after" block teaches the agent to *not* query — the most expensive habit is reflexive querying. Token cost matters more than feature parity.
 
