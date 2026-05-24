@@ -134,8 +134,12 @@ install_from_release() {
   local tarball="sharedwatch_${VERSION#v}_${platform}.tar.gz"
   local manifest="manifest.yaml"
 
-  local tmp; tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' EXIT
+  # Promote tmp to script scope (NOT `local`) so the EXIT trap below can
+  # still see it when the trap fires after this function has returned —
+  # under `set -u` an undefined $tmp aborts the cleanup with
+  # "tmp: unbound variable".
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "${tmp:-}"' EXIT
 
   log "downloading $tarball"
   curl -fsSL --retry 3 -o "$tmp/$tarball" "$base/$tarball"
