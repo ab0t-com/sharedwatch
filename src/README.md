@@ -66,6 +66,7 @@ sharedwatch [global flags] <command> [command flags] [args]
   init                      create the data dir + DB; print resolved paths
   run                       start watcher + consumer + reconcile loop
   status [--json]           print current state (mode, queue depth, last runs)
+  roots [--json]            list the folders being watched (single + multi-root)
   mode active [--ttl 30m]   enable active (fast-cadence) mode with TTL
   mode passive              force passive mode
   consume                   process pending events once and create a digest

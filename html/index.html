@@ -335,9 +335,21 @@ dgs_177956...  2026-05-23T23:40:00Z events=3  status=read    Shared drive digest
   </details>
 
   <details>
-    <summary>5. Self-discovery: schema, status, multi-root</summary>
+    <summary>5. Self-discovery: schema, status, roots</summary>
     <p><strong>Situation:</strong> your agent doesn't know the schema yet. Run these <em>once</em> per session and cache.</p>
-    <div class="terminal"><span class="prompt">$</span> sharedwatch schema --format json | jq 'keys'
+    <div class="terminal"><span class="prompt">$</span> <span class="comment"># What folders is sharedwatch watching? (Works single + multi-root.)</span>
+<span class="prompt">$</span> sharedwatch roots
+<span class="out">LABEL      PATH                                  PENDING  LAST EVENT
+(default)  /home/you/.local/share/sharedwatch/watch  0    -</span>
+
+<span class="prompt">$</span> sharedwatch roots --json
+<span class="out">{
+  "format_version": 1,
+  "mode": "single",
+  "roots": [{"label":"", "path":"/home/you/.local/share/sharedwatch/watch", "pending":0}]
+}</span>
+
+<span class="prompt">$</span> sharedwatch schema --format json | jq 'keys'
 <span class="out">[
   "actors",
   "cursors",

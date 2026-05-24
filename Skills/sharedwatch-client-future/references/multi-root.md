@@ -101,19 +101,21 @@ Default `--fields` for multi-root scope: `id, type, rel_path, watch_root, produc
 
 ## 7. Status and roots discovery
 
-There is no standalone `roots` subcommand. Multi-root state is surfaced through `status`:
+Use the dedicated `roots` subcommand (added in v0.0.3). Works for both single-root and multi-root setups; the single-root case synthesises a `(default)` row from `Cfg.WatchPath` so the answer is always concrete.
 
 ```bash
-# Human-readable: text-mode status includes roots when multi-root is configured.
-sharedwatch status
-# mode: passive  pending: 12
-# roots:
-#   auth     /workspace/projects/auth     pending=3   last=2026-05-22T14:32:11Z
-#   billing  /workspace/projects/billing  pending=9   last=2026-05-22T14:18:44Z
+# Human-readable table.
+sharedwatch roots
+# LABEL    PATH                          PENDING  LAST EVENT
+# auth     /workspace/projects/auth      3        2026-05-22T14:32:11Z
+# billing  /workspace/projects/billing   9        2026-05-22T14:18:44Z
 
-# Machine-readable: status --json carries a roots[] array.
-sharedwatch status --json | jq '.roots'
+# Machine-readable envelope (format_version: 1).
+sharedwatch roots --json
+# { "format_version": 1, "mode": "multi", "roots": [...] }
 ```
+
+`status --json` *also* carries a `roots[]` array — but only when multi-root is configured (preserves the pre-SW-AGENT-3 JSON contract for legacy callers). Prefer `roots` for the "what folders am I watching?" question; prefer `status` for the broader operational snapshot.
 
 `status --json` adds a `roots[]` array **only when multi-root is configured**:
 
