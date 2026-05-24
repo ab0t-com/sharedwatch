@@ -21,6 +21,11 @@ type Adapter interface {
 	Close() error
 	InsertOrCoalesceEvent(ctx context.Context, e events.Event, window time.Duration) error
 	InsertOrCoalesceEventResult(ctx context.Context, e events.Event, window time.Duration) (coalescedIntoID string, err error)
+	// InsertEvent is the plain insert primitive (no coalesce). Used by
+	// the hook subsystem (SW-AGENT-29) to write meta-events that should
+	// always be distinct rows — hook runs are user-triggered actions,
+	// not file-change observations, so they should never merge.
+	InsertEvent(ctx context.Context, e events.Event) error
 	GetRuntime(ctx context.Context) (mode.Runtime, error)
 	UpsertRuntime(ctx context.Context, r mode.Runtime) error
 	GetRuntimeJSON(ctx context.Context, key string) (string, bool, error)

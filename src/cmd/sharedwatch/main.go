@@ -274,6 +274,14 @@ func main() {
 		fatal(err)
 	}
 	defer a.Close()
+	// SW-AGENT-29 Phase 4: drain any in-flight --on-digest hooks
+	// before Close() releases the DB. 5s is the canonical graceful-
+	// shutdown bound — matches the per-hook 30s timeout default's
+	// worst-case waste budget (most hooks finish in <1s; the long
+	// tail is dominated by network ops in user scripts). The defer
+	// order matters: WaitForHooks runs BEFORE Close because the
+	// hook goroutines write meta-events through a.Store.
+	defer a.WaitForHooks(5 * time.Second)
 
 	switch rest[0] {
 	case "run":

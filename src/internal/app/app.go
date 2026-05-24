@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"sharedwatch/internal/config"
@@ -13,6 +16,7 @@ import (
 	"sharedwatch/internal/digest"
 	"sharedwatch/internal/events"
 	"sharedwatch/internal/hints"
+	"sharedwatch/internal/hooks"
 	"sharedwatch/internal/mode"
 	"sharedwatch/internal/reconcile"
 	"sharedwatch/internal/watcher"
@@ -25,6 +29,12 @@ type App struct {
 	Consumer  consumer.Service
 	Reconcile reconcile.Service
 	Logger    *slog.Logger
+
+	// hooksWG tracks in-flight async --on-digest subprocesses so a
+	// graceful shutdown can wait for them (bounded by WaitForHooks's
+	// timeout) before exit. Internal — callers use FireHookAsync to
+	// register work and WaitForHooks to drain. SW-AGENT-29 Phase 4.
+	hooksWG sync.WaitGroup
 }
 
 func New(ctx context.Context, cfg config.Config) (*App, error) {
@@ -336,8 +346,101 @@ func (a *App) ConsumeNow(ctx context.Context) (digest.Digest, bool, error) {
 			rt.ActiveUntil = time.Now().UTC().Add(a.Cfg.ActiveTTL)
 		}
 		_ = a.Store.UpsertRuntime(ctx, rt)
+		// SW-AGENT-29 Phase 4: fire the --on-digest hook async. The
+		// digest INSERT has already committed by this point, so the
+		// hook always sees a complete row. FireHookAsync returns
+		// immediately; the goroutine writes the meta-event when the
+		// subprocess finishes (or times out).
+		a.FireHookAsync(ctx, d)
 	}
 	return d, ok, nil
+}
+
+// FireHookAsync spawns the configured --on-digest hook for d, if any.
+// Returns immediately — the subprocess runs in a goroutine bounded by
+// cfg.OnDigestTimeout. WaitForHooks drains in-flight runs at shutdown.
+// SW-AGENT-29 Phase 4.
+func (a *App) FireHookAsync(ctx context.Context, d digest.Digest) {
+	if a.Cfg.OnDigest == "" {
+		return
+	}
+	// Marshal the digest into the JSON shape the hook receives on stdin.
+	// Mirrors `digest show --json` so consumers can use the same jq
+	// recipes either way (see tasklist §3.2).
+	payload, err := json.Marshal(struct {
+		FormatVersion int       `json:"format_version"`
+		ID            string    `json:"id"`
+		CreatedAt     time.Time `json:"created_at"`
+		WindowStart   time.Time `json:"window_start"`
+		WindowEnd     time.Time `json:"window_end"`
+		Mode          string    `json:"mode"`
+		EventCount    int       `json:"event_count"`
+		Summary       string    `json:"summary"`
+		Status        string    `json:"status"`
+		WatchRoot     string    `json:"watch_root,omitempty"`
+	}{
+		FormatVersion: 1,
+		ID:            d.ID,
+		CreatedAt:     d.CreatedAt,
+		WindowStart:   d.WindowStart,
+		WindowEnd:     d.WindowEnd,
+		Mode:          d.Mode,
+		EventCount:    d.EventCount,
+		Summary:       d.Summary,
+		Status:        string(d.Status),
+		WatchRoot:     d.WatchRoot,
+	})
+	if err != nil {
+		// Pathological — Digest is all simple types. Log and skip
+		// rather than crash the consumer.
+		a.Logger.Error("on-digest hook: marshal failed", "err", err, "digest_id", d.ID)
+		return
+	}
+
+	a.hooksWG.Add(1)
+	go func() {
+		defer a.hooksWG.Done()
+
+		// Use a fresh context (not the caller's ctx) so a Consumer-
+		// triggered context cancel doesn't kill an in-flight hook that
+		// the WaitGroup is meant to drain. The hook's own timeout
+		// bounds it; WaitForHooks at shutdown is the outer bound.
+		hookCtx := context.Background()
+		sidecarDir := filepath.Join(a.Cfg.DataDir, "hooks")
+		res := hooks.RunHookWithSidecar(hookCtx, string(payload), a.Cfg.OnDigest, a.Cfg.OnDigestTimeout, sidecarDir, d.ID)
+
+		if _, err := hooks.EmitMetaEvent(hookCtx, a.Store, res, d); err != nil {
+			a.Logger.Error("on-digest hook: meta-event insert failed", "err", err, "digest_id", d.ID, "reason", res.Reason)
+		}
+		switch res.Reason {
+		case hooks.ReasonSuccess:
+			a.Logger.Info("on-digest hook completed", "digest_id", d.ID, "duration_ms", res.Duration.Milliseconds())
+		case hooks.ReasonTimeout:
+			a.Logger.Warn("on-digest hook timed out", "digest_id", d.ID, "timeout", a.Cfg.OnDigestTimeout.String())
+		case hooks.ReasonNonzeroExit:
+			a.Logger.Warn("on-digest hook exited non-zero", "digest_id", d.ID, "exit_code", res.ExitCode, "duration_ms", res.Duration.Milliseconds(), "stderr_bytes", res.StderrBytes)
+		case hooks.ReasonSpawnError:
+			a.Logger.Error("on-digest hook failed to spawn", "digest_id", d.ID, "err", res.SpawnErr)
+		}
+	}()
+}
+
+// WaitForHooks blocks until every in-flight --on-digest hook has
+// completed OR the supplied timeout elapses, whichever comes first.
+// The graceful-shutdown path in main calls this before Close(). Hooks
+// that ignore SIGKILL (rare) won't be waited for past the timeout —
+// see hooks.RunHook's WaitDelay for the per-hook bound.
+func (a *App) WaitForHooks(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		a.hooksWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		a.Logger.Warn("graceful shutdown: --on-digest hooks did not drain in time", "timeout", timeout.String())
+	}
 }
 
 func (a *App) Run(ctx context.Context) error {
