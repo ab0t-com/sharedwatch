@@ -232,6 +232,23 @@ Data lives where `--data-dir` points (default `$XDG_DATA_HOME/sharedwatch`). Not
 - **Duplicates beat misses.** The reconcile pass is the safety net for any change the watcher missed.
 - **Linux is the supported platform for v1.** macOS and Windows likely work (polling), but are not exercised in CI.
 
+## Who uses this and for what
+
+A reality-checked persona table for the v0.1.0 surface (file events + digests + the `--on-digest` hook). Honest fit grades — we don't pretend to be a fit for everyone.
+
+| Persona | The job they're hiring this for | Fit | Why |
+|---|---|---|---|
+| **Solo dev** | "Ping me when my watched folder has been busy" | ★★★☆☆ | Real but mild — solo devs usually ARE the source of activity. Best fit is when a code-gen tool (Claude/Copilot) is doing the writing and the dev wants awareness. |
+| **Small team** | "Slack-post when the shared design folder updates" | ★★★★☆ | Clear job, our solution fits — `--on-digest 'curl -X POST ...'` and you're done. Limited only by "team must already use sharedwatch." |
+| **AI agent coordinator** | "Get real-time signal when peer agents do work" | ★★★☆☆ | Per-digest cadence (5s active → 10m passive) is calm-by-design; agents wanting per-file granularity should tail the events journal with a cursor instead. |
+| **Ops / SRE** | "Wire into our service registry / alerting" | ★★★★☆ for digest fan-out · ★★☆☆☆ for full ops needs | `--on-digest` covers audit/notify cleanly. Lifecycle/failure hooks (startup, shutdown, failed-event thresholds) are on the roadmap — see [`docs/design/event-and-hook-surface-expansion-20260524.md`](../docs/design/event-and-hook-surface-expansion-20260524.md). |
+| **Compliance / audit** | "Archive every digest to S3 / an immutable store" | ★★★★★ | Killer fit. One line, zero plumbing, every digest persisted off-host. The journal is local-only by design; `--on-digest 'aws s3 cp - "s3://..."'` gives you the off-host story. |
+| **Pipeline maintainer** | "Kick a downstream build when new files arrive" | ★★★★☆ | Works when "per digest" is acceptable cadence. Most batch pipelines are fine with it; if you need per-file dispatch, use the events-cursor tail pattern instead. |
+
+The integration primitive across every row above is the `--on-digest <shell-command>` flag — pipe sharedwatch into anything else in your stack via shell. Full walk-through with seven copy-paste recipes (Slack, S3, PagerDuty, audit log, desktop notification, pipeline trigger, wrapper script): [`docs/guides/on-digest-hooks.md`](../docs/guides/on-digest-hooks.md).
+
+What we deliberately **don't** build (so you don't go looking): per-file-event hooks (use the cursor tail), native webhook POST flag (`curl` in `--on-digest` is more flexible), plugin system, synchronous "veto" hooks. Principled rejection rationale in the design doc above.
+
 ## Project status
 The implementation passes its own test suite and end-to-end dogfooding scenarios (emit / consume / digest / reconcile / mode transitions / restart safety). See `CHANGELOG.md` for what's landed and `docs/JOHN_HANDOFF.md` for design intent.
 
