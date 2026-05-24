@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"sharedwatch/internal/config"
 )
@@ -21,12 +22,16 @@ const (
 	envRoot       = "SHAREDWATCH_ROOT"
 	envCursorName = "SHAREDWATCH_CURSOR_NAME"
 	envHints      = "SHAREDWATCH_HINTS"
+	// SW-AGENT-29.
+	envOnDigest        = "SHAREDWATCH_ON_DIGEST"
+	envOnDigestTimeout = "SHAREDWATCH_ON_DIGEST_TIMEOUT"
 )
 
 // knownEnvVars is the canonical list, in display order, for `config show`.
 var knownEnvVars = []string{
 	envActor, envActorKind, envSession, envTask, envAddressee,
 	envFormat, envRoot, envCursorName, envHints,
+	envOnDigest, envOnDigestTimeout,
 }
 
 // applyEnvToConfig overlays SHAREDWATCH_* env vars onto the loaded config,
@@ -64,6 +69,15 @@ func applyEnvToConfig(cfg config.Config) config.Config {
 	}
 	if v := os.Getenv(envHints); v != "" {
 		cfg.Hints = v
+	}
+	// SW-AGENT-29: --on-digest env overlay.
+	if v := os.Getenv(envOnDigest); v != "" {
+		cfg.OnDigest = v
+	}
+	if v := os.Getenv(envOnDigestTimeout); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.OnDigestTimeout = d
+		}
 	}
 	return cfg
 }

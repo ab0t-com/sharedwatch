@@ -191,6 +191,14 @@ func Load(path string, base Config) (Config, error) {
 			cfg.Hints = val
 		case "cursor_name":
 			cfg.CursorName = val
+
+		// SW-AGENT-29: --on-digest hook keys.
+		case "on_digest":
+			cfg.OnDigest = val
+		case "on_digest_timeout":
+			if d, err := time.ParseDuration(val); err == nil {
+				cfg.OnDigestTimeout = d
+			}
 		}
 	}
 	return cfg, s.Err()

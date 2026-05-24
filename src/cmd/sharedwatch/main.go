@@ -57,6 +57,11 @@ func main() {
 	producerOverride := root.String("producer", "", "override producer_id stamped on emitted events")
 	hintsFlag := root.String("hints", "", "next-step suggestions profile: default|agent|terse|off (env SHAREDWATCH_HINTS; auto-promotes to agent for --format json)")
 	quietFlag := root.Bool("quiet", false, "suppress Next: hint blocks and friendly informational lines (errors still print); equivalent to --hints off + silenced init/stop status messages")
+	// SW-AGENT-29: hook surface. Bound on the root flagset (not on
+	// `run` / `consume` individually) so the daemon's resolved cfg
+	// carries them through to the consumer call site uniformly.
+	onDigest := root.String("on-digest", "", "shell command to fire after every successful digest INSERT; digest JSON on stdin; async, never blocks the consumer (env SHAREDWATCH_ON_DIGEST)")
+	onDigestTimeout := root.Duration("on-digest-timeout", 0, "hard timeout for the --on-digest subprocess (default 30s; env SHAREDWATCH_ON_DIGEST_TIMEOUT)")
 	var rootAttr attrFlags
 	bindAttrFlags(root, &rootAttr, "applied to every event emitted during this invocation")
 	showVersion := root.Bool("version", false, "print version and exit")
@@ -198,6 +203,19 @@ func main() {
 	}
 	if *producerOverride != "" {
 		cfg.ProducerID = *producerOverride
+	}
+	// SW-AGENT-29 (Phase 3): --on-digest / --on-digest-timeout flag
+	// overlay. Empty flag → leave cfg value (which carries env+file).
+	// Non-empty flag wins per the canonical chain (flag > env > config
+	// > default). Timeout is gated on > 0 since flag.Duration's zero
+	// value can't distinguish "user passed 0" from "user didn't pass".
+	// We treat "0" as "use the config/default" — there's no sensible
+	// reason a user would want a 0-duration hook.
+	if *onDigest != "" {
+		cfg.OnDigest = *onDigest
+	}
+	if *onDigestTimeout > 0 {
+		cfg.OnDigestTimeout = *onDigestTimeout
 	}
 	// Merge flag > env (already in cfg) > config to get the final
 	// attribution payload for this invocation. We REPLACE rootAttr with

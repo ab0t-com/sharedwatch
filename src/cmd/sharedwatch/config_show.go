@@ -148,6 +148,9 @@ func effectiveConfigRows(cfg config.Config) [][2]string {
 		{"producer_id", cfg.ProducerID},
 		{"ignore_patterns", strings.Join(cfg.IgnorePatterns, ", ")},
 		{"include_patterns", strings.Join(cfg.IncludePatterns, ", ")},
+		{"", ""},
+		{"on_digest", defaultDashLocal(cfg.OnDigest)},
+		{"on_digest_timeout", cfg.OnDigestTimeout.String()},
 	}
 	// Drop trailing empty rows for cleaner output if cfg lacks the separator targets.
 	return rows
@@ -206,6 +209,13 @@ type effectiveConfigJSON struct {
 	ProducerID        string   `json:"producer_id,omitempty"`
 	IgnorePatterns    []string `json:"ignore_patterns,omitempty"`
 	IncludePatterns   []string `json:"include_patterns,omitempty"`
+
+	// SW-AGENT-29 (Phase 3): --on-digest hook config surfaced for
+	// `config show --json` / `config show` so operators can confirm
+	// the daemon picked up their flag/env/file setting before relying
+	// on it.
+	OnDigest        string `json:"on_digest,omitempty"`
+	OnDigestTimeout string `json:"on_digest_timeout"`
 }
 
 type rootJSON struct {
@@ -241,6 +251,8 @@ func toEffectiveConfigJSON(cfg config.Config) effectiveConfigJSON {
 		ProducerID:        cfg.ProducerID,
 		IgnorePatterns:    cfg.IgnorePatterns,
 		IncludePatterns:   cfg.IncludePatterns,
+		OnDigest:          cfg.OnDigest,
+		OnDigestTimeout:   cfg.OnDigestTimeout.String(),
 	}
 	for _, r := range cfg.WatchRoots {
 		out.WatchRoots = append(out.WatchRoots, rootJSON{Label: r.Label, Path: r.Path})

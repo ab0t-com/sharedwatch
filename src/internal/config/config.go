@@ -60,6 +60,15 @@ type Config struct {
 	DefaultSince  string // honoured by `events list --since` when no cursor
 	Hints         string // honoured by `--hints`; aligns with SHAREDWATCH_HINTS
 	CursorName    string // honoured by `events list --cursor-name`
+
+	// SW-AGENT-29 (--on-digest hook surface). When OnDigest is non-empty,
+	// the consumer runs it (via `sh -c "<cmd>"`) after every successful
+	// digest INSERT, async, with the digest JSON on stdin. Stdout/stderr
+	// captured to <DataDir>/hooks/<digest_id>.{out,err}. Meta-event
+	// `hook.completed` or `hook.failed` written into the journal.
+	// OnDigestTimeout bounds the subprocess (default 30s if zero).
+	OnDigest        string
+	OnDigestTimeout time.Duration
 }
 
 // defaultDataHome resolves the XDG_DATA_HOME spec: $XDG_DATA_HOME if set,
@@ -112,5 +121,11 @@ func Default() Config {
 		HashMaxSize:     1 << 20, // 1 MB
 		ProducerID:      fmt.Sprintf("%s:%d", host, os.Getpid()),
 		ActorTTL:        5 * time.Minute,
+		// SW-AGENT-29: --on-digest defaults. Empty command = hook
+		// disabled. 30s is a generous timeout that covers slow Slack
+		// posts and S3 uploads while preventing a runaway hook from
+		// holding a goroutine forever.
+		OnDigest:        "",
+		OnDigestTimeout: 30 * time.Second,
 	}
 }
