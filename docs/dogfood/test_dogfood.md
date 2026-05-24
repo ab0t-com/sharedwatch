@@ -1114,11 +1114,12 @@ $SW --data-dir "$DOG" events cursor reset agent-a
 $SW --data-dir "$DOG" events cursor list
 # Expected: agent-a removed OR position cleared
 
-# (d) Encode then decode a cursor token round-trip
-TOK=$($SW --data-dir "$DOG" events cursor encode 2026-05-24T00:00:00Z evt_test 2>&1)
+# (d) Encode then decode a cursor token round-trip.
+#     NB: `encode` takes FLAGS, not positional args — `--created-at <ts> --id <evt_id>`.
+TOK=$($SW --data-dir "$DOG" events cursor encode --created-at 2026-05-24T00:00:00Z --id evt_test)
 echo "TOK=$TOK"
-$SW --data-dir "$DOG" events cursor decode "$TOK" 2>&1
-# Expected: decode returns the same timestamp + id; round-trip works
+$SW --data-dir "$DOG" events cursor decode "$TOK"
+# Expected: decoded line "created_at=2026-05-24T00:00:00Z id=evt_test"; round-trip works.
 ```
 
 **What this exercises:** the full `events cursor` surface; encode/decode round-trip; implicit cursor creation; reset semantics.
