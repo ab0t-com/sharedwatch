@@ -152,13 +152,17 @@ install_from_release() {
   log "downloading $manifest"
   curl -fsSL --retry 3 -o "$tmp/$manifest" "$base/$manifest"
 
-  # Verify SHA-256. Manifest format expected:
-  #   <sha256>  <filename>
-  # listed under an `artifacts:` block; grep is sufficient — no yq dependency.
+  # Verify SHA-256. Manifest entries look like:
+  #   - file: <name>
+  #     sha256: <hex>
+  #     size_bytes: <int>
+  # We find the file line, then the next sha256 line in the same block.
   log "verifying SHA-256"
   local expected
-  expected="$(grep -E "^\s*-\s*sha256:" "$tmp/$manifest" -A1 \
-              | grep -B1 "$tarball" | grep sha256 | awk '{print $3}' | head -1)"
+  expected="$(awk -v fname="$tarball" '
+    $1 == "-" && $2 == "file:" && $3 == fname { found=1; next }
+    found && $1 == "sha256:" { print $2; exit }
+  ' "$tmp/$manifest")"
   [ -n "$expected" ] || die "no SHA-256 entry for $tarball in $manifest"
 
   local actual
