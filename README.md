@@ -20,6 +20,22 @@ A single Go binary that watches a folder on disk, captures every change into a S
 
 **Full program documentation lives in [`src/README.md`](src/README.md).** Free-form team docs (design discussions, reports, specs, dogfood scenarios) live under [`docs/`](docs/README.md). This file is just orientation for the repo layout.
 
+## For AI agents (and humans) sharing a filesystem
+
+sharedwatch is built for the case where multiple writers — humans in editors, AI agents in their own runtimes, build systems, sync daemons — share one folder and need to be aware of each other's work without polling or blocking.
+
+**Hooks — every change carries attribution.** Stamp `--actor`, `--session`, `--task`, `--intent`, `--addressee`, `--ref`, `--tag` on the root invocation (every event the daemon emits this lifetime) or on a single `test emit`. The values land in `events.payload_json` v1 and survive into digests, `events list` rows, and SQL queries. Cross-actor edits on the same file produce *distinct* events — actor-aware coalesce means one agent's attribution never silently overwrites another's.
+
+**Awareness — agents discover what changed since they last looked.** Each agent reads with a named cursor (`sharedwatch events list --cursor-name <me> --format jsonl`) that advances atomically on every read. No polling overhead, no missed events on restart, no shared coordination needed. For a quick L1 picture across all roots, `sharedwatch overview --format json` returns an aggregate with a `drill` map of pre-computed follow-up commands. For "what folders am I watching?", `sharedwatch roots`.
+
+**Coordination — cooperative, advisory, never blocking.** `sharedwatch intent declare <path> --actor <me> --ttl 5m` tells peers "I'm working here". `sharedwatch lease acquire <path-glob> --actor <me> --ttl 30m` declares a stronger interest; when a *different* actor writes inside an active lease the watcher logs a structured warning (`event_actor`, `lease_actor`, `lease_path_glob`, `lease_expires_at`) so cooperative peers can back off. **The watcher never blocks the write** — your underlying filesystem semantics are untouched. Coordination is a social contract, not a kernel lock.
+
+**Self-contained.** Single Go binary. SQLite is bundled inside (pure-Go [`modernc.org/sqlite`](https://gitlab.com/cznic/sqlite) — no CGO, no system `libsqlite3`). No daemons it depends on. One process per data dir. Updates via `sharedwatch update --apply` (safe by default; atomic-rename install).
+
+**Loadable skills for agents.** Two skill packages under [`Skills/`](Skills/) are designed to be loaded into an AI agent's context: `sharedwatch-client` (operational reference) and `sharedwatch-client-future` (v0.8+ features). The agent system prompt at [`docs/agent/agent-system-prompt-20260522.md`](docs/agent/agent-system-prompt-20260522.md) is a ready-to-use template.
+
+See [`src/README.md`](src/README.md) for the full CLI surface, [`docs/design/multi-agent-discussion-20260522.md`](docs/design/multi-agent-discussion-20260522.md) for the design rationale, and [`docs/dogfood/test_dogfood.md`](docs/dogfood/test_dogfood.md) for 18 runnable end-to-end scenarios including the canonical multi-agent handoff.
+
 ## Install
 
 ```bash
@@ -55,18 +71,21 @@ Pre-commit / pre-push gitleaks hooks live in `.git/hooks/` (local-only, not vers
 
 ## Cutting a release
 
+Releases ship in-repo under `release/vX.Y.Z/` and are served via `raw.githubusercontent.com` — no GitHub Releases UI, no `gh` CLI. Full rules in [`GITOPS.md`](GITOPS.md) §10.
+
 ```bash
-./scripts/release.sh --version v0.8.0
-# -> dist/sharedwatch_0.8.0_{linux,darwin}_{amd64,arm64}.tar.gz
-# -> dist/manifest.yaml (with SHA-256 of each tarball)
-# then (you, not the script):
-git tag -a v0.8.0 -m "release v0.8.0"
-git push origin v0.8.0
-gh release create v0.8.0 dist/*.tar.gz dist/manifest.yaml \
-  --title "v0.8.0" --notes-file src/CHANGELOG.md
+./scripts/release.sh --version vX.Y.Z
+mkdir -p release/vX.Y.Z
+mv dist/sharedwatch_*.tar.gz dist/manifest.yaml release/vX.Y.Z/
+echo "vX.Y.Z" > release/LATEST
+git add release/vX.Y.Z release/LATEST
+git commit -m "release: vX.Y.Z artifacts"
+git tag -a vX.Y.Z HEAD -m "vX.Y.Z — <one-line summary>"
+git branch vX.Y.Z HEAD
+git push origin refs/heads/main refs/heads/vX.Y.Z refs/tags/vX.Y.Z
 ```
 
-The installer downloads `manifest.yaml` alongside the tarball and verifies the SHA-256 before installing — `release.sh` and `install.sh` are designed as a pair.
+The installer (`scripts/install.sh`) and the in-binary `sharedwatch update` both read `release/LATEST`, fetch the tarball + `manifest.yaml`, verify SHA-256, then install. `release.sh` and `install.sh` are designed as a pair.
 
 ## Security
 
