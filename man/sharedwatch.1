@@ -4,7 +4,7 @@
 .\"
 .\" Source of truth for the program: src/cmd/sharedwatch/main.go
 .\" When commands or flags change, update this file in the same PR.
-.TH SHAREDWATCH 1 "2026-05-24" "v0.0.6" "User Commands"
+.TH SHAREDWATCH 1 "2026-05-24" "v0.0.7" "User Commands"
 .SH NAME
 sharedwatch \- calm, pull-based activity journal for a local shared folder
 .SH SYNOPSIS
@@ -110,7 +110,7 @@ Register or heartbeat an actor in the actors registry.
 .B intent declare \fIpath\fR \fB--actor\fR \fIid\fR \fR[\fB--ttl\fR \fId\fR] [\fB--intent\fR \fItext\fR]
 Cooperative intent declaration on a path. Peer agents SHOULD respect it.
 .TP
-.B lease acquire \fIpath-glob\fR \fB--actor\fR \fIid\fR \fR[\fB--ttl\fR \fId\fR]
+.B lease grant \fIpath-glob\fR \fB--actor\fR \fIid\fR \fR[\fB--ttl\fR \fId\fR]
 Acquire an advisory lease on a path-glob. The watcher logs a warning when
 another actor writes to the locked area.
 .TP

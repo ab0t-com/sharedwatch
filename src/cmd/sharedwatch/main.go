@@ -180,10 +180,14 @@ func main() {
 		cfg.ProducerID = *producerOverride
 	}
 	// Merge flag > env (already in cfg) > config to get the final
-	// attribution payload for this invocation.
-	finalAttr := mergeAttrFlags(rootAttr, cfg)
-	if !finalAttr.isEmpty() {
-		cfg.PayloadJSON = events.BuildPayloadV1(finalAttr.toPayload())
+	// attribution payload for this invocation. We REPLACE rootAttr with
+	// finalAttr in-place so downstream handlers (notably handleTest, which
+	// merges rootAttr with its own per-event sub-flags) see the env- and
+	// config-derived defaults too. SW-AGENT-20 dogfood scenario 21 caught
+	// the omission.
+	rootAttr = mergeAttrFlags(rootAttr, cfg)
+	if !rootAttr.isEmpty() {
+		cfg.PayloadJSON = events.BuildPayloadV1(rootAttr.toPayload())
 	}
 
 	// Subcommands that don't need an app instance. `config show` reads
@@ -596,23 +600,24 @@ func handleEventsStats(ctx context.Context, a *app.App, args []string) {
 	since := fs.Duration("since", 24*time.Hour, "lookback window (default 24h)")
 	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
 	_ = fs.Parse(args)
+	// SW-AGENT-20 §S1.1: agent-readable error envelope when --format json|jsonl.
+	jsonErr := isJSONFormat(*formatFlag)
 	if *root == "" {
-		fmt.Fprintln(os.Stderr, "events stats requires --root <label>. For across-roots counts, use `sharedwatch overview`.")
-		os.Exit(2)
+		fatalJSON(jsonErr, errBadFlag, "events stats requires --root <label>. For across-roots counts, use `sharedwatch overview`.")
 	}
 	if strings.Contains(*root, "=") {
-		fatal(fmt.Errorf("--root on events stats is a FILTER (just the label). Definitions go on the root command."))
+		fatalJSON(jsonErr, errBadFlag, "--root on events stats is a FILTER (just the label). Definitions go on the root command.")
 	}
 	stats, err := a.ComputeEventsStats(ctx, *root, *since)
 	if err != nil {
-		fatal(err)
+		fatalJSON(jsonErr, errDBError, "compute events stats: %v", err)
 	}
 	switch strings.ToLower(*formatFlag) {
 	case "json":
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(stats); err != nil {
-			fatal(err)
+			fatalJSON(jsonErr, errInternal, "encode events stats: %v", err)
 		}
 	default:
 		fmt.Printf("events stats — root=%s window=%s..%s\n", stats.Root, stats.Window.Start.Format(time.RFC3339), stats.Window.End.Format(time.RFC3339))
@@ -901,6 +906,7 @@ func handleSQL(ctx context.Context, a *app.App, args []string) {
 	allowWrite := fs.Bool("write", false, "allow non-SELECT statements (default: read-only)")
 	explain := fs.Bool("explain", false, "print EXPLAIN QUERY PLAN before executing")
 	_ = fs.Parse(cleaned)
+	jsonErr := isJSONFormat(*formatFlag)
 	positional := fs.Args()
 
 	var query string
@@ -908,29 +914,29 @@ func handleSQL(ctx context.Context, a *app.App, args []string) {
 	case *file != "":
 		b, err := os.ReadFile(*file)
 		if err != nil {
-			fatal(err)
+			fatalJSON(jsonErr, errNotFound, "read --file %s: %v", *file, err)
 		}
 		query = string(b)
 	case useStdin:
 		b, err := io.ReadAll(os.Stdin)
 		if err != nil {
-			fatal(err)
+			fatalJSON(jsonErr, errInternal, "read stdin: %v", err)
 		}
 		query = string(b)
 	case len(positional) >= 1:
 		query = strings.Join(positional, " ")
 	default:
-		fatal(fmt.Errorf("usage: sharedwatch sql <sql> | - | --file path"))
+		fatalJSON(jsonErr, errBadFlag, "usage: sharedwatch sql <sql> | - | --file path")
 	}
 	query = strings.TrimSpace(query)
 	if query == "" {
-		fatal(fmt.Errorf("empty query"))
+		fatalJSON(jsonErr, errBadFlag, "empty query")
 	}
 
 	if *explain {
 		cols, rows, err := a.Store.RawSQL(ctx, "EXPLAIN QUERY PLAN "+query, false)
 		if err != nil {
-			fatal(err)
+			fatalJSON(jsonErr, errDBError, "explain query plan: %v", err)
 		}
 		fmt.Fprintln(os.Stderr, "# EXPLAIN QUERY PLAN")
 		_ = output.Render(os.Stderr, output.FormatText, output.Result{Columns: cols, Rows: rows})
@@ -939,19 +945,24 @@ func handleSQL(ctx context.Context, a *app.App, args []string) {
 	cols, rows, err := a.Store.RawSQL(ctx, query, *allowWrite)
 	if err != nil {
 		if errors.Is(err, db.ErrWriteSQLDenied) {
+			// Special-case: pre-existing UX kept the two-line hint on stderr
+			// for text mode. JSON mode collapses to a single envelope.
+			if jsonErr {
+				fatalJSON(true, errBadFlag, "%v (rerun with --write to allow mutating statements)", err)
+			}
 			fmt.Fprintln(os.Stderr, "error:", err)
 			fmt.Fprintln(os.Stderr, "hint: rerun with --write to allow mutating statements")
 			os.Exit(2)
 		}
-		fatal(err)
+		fatalJSON(jsonErr, errDBError, "sql: %v", err)
 	}
 
 	f, err := output.ParseFormat(*formatFlag)
 	if err != nil {
-		fatal(err)
+		fatalJSON(jsonErr, errBadFlag, "--format: %v", err)
 	}
 	if err := output.Render(os.Stdout, f, output.Result{Columns: cols, Rows: rows}); err != nil {
-		fatal(err)
+		fatalJSON(jsonErr, errInternal, "render: %v", err)
 	}
 }
 
@@ -1160,17 +1171,18 @@ func handleOverview(ctx context.Context, a *app.App, args []string) {
 	since := fs.Duration("since", 24*time.Hour, "lookback window for the aggregations (default 24h)")
 	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
 	_ = fs.Parse(args)
+	jsonErr := isJSONFormat(*formatFlag)
 
 	ov, err := a.ComputeOverview(ctx, *since)
 	if err != nil {
-		fatal(err)
+		fatalJSON(jsonErr, errDBError, "compute overview: %v", err)
 	}
 	switch strings.ToLower(*formatFlag) {
 	case "json":
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(ov); err != nil {
-			fatal(err)
+			fatalJSON(jsonErr, errInternal, "encode overview: %v", err)
 		}
 	default:
 		fmt.Printf("sharedwatch overview (since %s)\n", ov.Since)
@@ -1256,9 +1268,10 @@ func handleSchema(ctx context.Context, a *app.App, args []string) {
 	fs := flag.NewFlagSet("schema", flag.ExitOnError)
 	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
 	_ = fs.Parse(args)
+	jsonErr := isJSONFormat(*formatFlag)
 	tables, err := a.Store.Schema(ctx)
 	if err != nil {
-		fatal(err)
+		fatalJSON(jsonErr, errDBError, "read schema: %v", err)
 	}
 	wantTable := ""
 	if rest := fs.Args(); len(rest) > 0 {
@@ -1273,7 +1286,7 @@ func handleSchema(ctx context.Context, a *app.App, args []string) {
 		}
 		tables = filtered
 		if len(tables) == 0 {
-			fatal(fmt.Errorf("no such table: %s", wantTable))
+			fatalJSON(jsonErr, errNotFound, "no such table: %s", wantTable)
 		}
 	}
 	switch strings.ToLower(*formatFlag) {
@@ -1281,7 +1294,7 @@ func handleSchema(ctx context.Context, a *app.App, args []string) {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(tables); err != nil {
-			fatal(err)
+			fatalJSON(jsonErr, errInternal, "encode schema: %v", err)
 		}
 	default:
 		for _, t := range tables {
@@ -1442,7 +1455,7 @@ COMMANDS
   schema [<table>]          print live DDL from the DB (--format text|json)
   actor heartbeat <id>      register/heartbeat an actor in the actors registry
   intent declare <path>     declare cooperative intent on a path (--ttl, --actor, --intent)
-  lease acquire <path-glob> acquire an advisory lease on a path glob (--ttl, --actor)
+  lease grant <path-glob>   acquire an advisory lease on a path glob (--ttl, --actor)
   test emit [relpath]       inject a synthetic event for end-to-end testing
                             (--payload <json> OR attribution flags below)
   update [--apply]          check for / install a newer release (safe: dry-run by default;

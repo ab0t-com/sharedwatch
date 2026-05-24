@@ -66,7 +66,10 @@ func handleStop(_ context.Context, cfg config.Config, args []string) {
 	// Send SIGTERM. On POSIX, FindProcess never fails so we have to
 	// detect "process is gone" via the Signal call.
 	if err := proc.Signal(syscall.SIGTERM); err != nil {
-		if errors.Is(err, syscall.ESRCH) {
+		// SW-AGENT-20 scenario 22 caught the ESRCH-only check missing
+		// Go's wrapped `os.ErrProcessDone`, which is what `os.Process.Signal`
+		// returns once the process is observed gone. Match both.
+		if errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrProcessDone) {
 			if !quietMode {
 				fmt.Printf("daemon already gone (pid %d not found; lock file is stale and can be removed)\n", pid)
 			}

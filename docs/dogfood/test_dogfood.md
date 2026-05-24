@@ -109,6 +109,10 @@ safe_clear_files && $SW reconcile now    # baseline before next scenario
 | 18 | Symlink to outside the root | Boundary integrity |
 | 19 | (reserved for SW-AGENT-16 content-diff dogfood) | — |
 | 20 | CLI polish: `--quiet`, `--dry-run`, JSON errors (v0.0.6) | UX guarantees + structured errors |
+| 21 | First-session canonical workflow with env vars (v0.0.7) | The ergonomics promise: export once, never type flags |
+| 22 | Stale lock file recovery (v0.0.7) | What `stop` and `run` do when a daemon died hard |
+| 23 | Misbehaving agent — text vs JSON error parity (v0.0.7) | Error shape consistency across format-aware commands |
+| 24 | Multi-agent lease warning (v0.0.7) | Watcher logs structured warning on cross-actor writes inside a lease |
 
 ---
 
@@ -699,3 +703,231 @@ $SW --data-dir "$DOG" events list --since not-a-time
 **Pass criteria:** all six commands behave exactly as the expected blocks describe. Any divergence is a regression in SW-AGENT-19's contract.
 
 **Recorded run (v0.0.6, 2026-05-24):** see worklog in [`../../tickets/tasklist_20260524_051945.md`](../../tickets/tasklist_20260524_051945.md) for the actual captured output against the deployed binary.
+
+---
+
+## 21 — First-session canonical workflow with env vars (v0.0.7)
+
+**Goal:** confirm the v0.0.5 ergonomics promise — an agent exports `SHAREDWATCH_*` once at session start and never types those flags again. Walks the full init → emit → cursor read → introspect → stop lifecycle.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-21
+rm -rf "$DOG" && mkdir -p "$DOG"
+export SHAREDWATCH_ACTOR=demo-agent-21
+export SHAREDWATCH_ACTOR_KIND=ai_agent
+export SHAREDWATCH_FORMAT=jsonl
+export SHAREDWATCH_HINTS=agent
+export SHAREDWATCH_CURSOR_NAME=demo-agent-21
+```
+
+**Actions + expected:**
+
+```bash
+# (a) init — no flags. Expected: prints paths, Next: hint suggests run.
+$SW --data-dir "$DOG" init
+
+# (b) Emit attributed event — no --actor / --task / --format flags.
+$SW --data-dir "$DOG" --task demo test emit hello.md
+# Expected stdout: "emitted evt_xxx hello.md"
+# Expected journal entry: payload_json.actor = "demo-agent-21"
+
+# (c) Cursor read — no --cursor-name / --format flags.
+#     Should be in cursor mode (env-derived) AND JSONL (env-derived).
+$SW --data-dir "$DOG" events list
+# Expected: 1 jsonl row for hello.md with actor=demo-agent-21
+# Expected: cursor "demo-agent-21" advances to that event
+
+# (d) Cursor read again — should be empty (cursor advanced past).
+$SW --data-dir "$DOG" events list
+# Expected: zero rows
+
+# (e) Introspect — verify env vars are being read.
+$SW --data-dir "$DOG" config show | head -20
+
+# (f) Status (JSON, agent profile — auto from env).
+$SW --data-dir "$DOG" status --json | jq '.next | length'
+# Expected: integer > 0 (next[] populated under agent profile)
+
+# (g) Stop (no daemon running). Friendly + suggests run.
+$SW --data-dir "$DOG" stop
+```
+
+**What this exercises:** the env-var resolution chain (SW-AGENT-18 §3) end-to-end; `--cursor-name` default from env activating cursor mode without an explicit flag; `SHAREDWATCH_FORMAT=jsonl` flowing into `events list`; `SHAREDWATCH_HINTS=agent` producing rich `next[]` arrays.
+
+**Pass criteria:** none of (a)–(g) require an explicit `--actor` / `--format` / `--cursor-name` / `--hints` flag; every command's output matches expectations as if those flags had been typed.
+
+**Recorded run:** see worklog in [`../../tickets/tasklist_20260524_053824.md`](../../tickets/tasklist_20260524_053824.md).
+
+---
+
+## 22 — Stale lock file recovery (v0.0.7)
+
+**Goal:** when a daemon dies hard (SIGKILL or kernel OOM), it can't run its `defer fileLock.Release` — the lock file is left on disk with a stale PID. Verify `sharedwatch stop` detects the stale PID via ESRCH, and the next `sharedwatch run` recovers cleanly because `flock(2)` releases on process exit even without explicit unlock.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-22
+rm -rf "$DOG" && mkdir -p "$DOG"
+$SW --data-dir "$DOG" init >/dev/null
+```
+
+**Actions + expected:**
+
+```bash
+# (a) Start a daemon in background.
+$SW --data-dir "$DOG" run >"$DOG/run.log" 2>&1 &
+RUNPID=$!
+sleep 1
+
+# (b) Confirm lock file has our PID.
+cat "$DOG/sharedwatch.lock"
+# Expected: $RUNPID
+
+# (c) SIGKILL the daemon (no chance to release the lock).
+kill -9 "$RUNPID"
+sleep 0.5
+
+# (d) Lock file should STILL exist after SIGKILL (no defer ran).
+ls "$DOG/sharedwatch.lock"
+# Expected: file present, PID matches the dead one.
+
+# (e) `stop` should detect ESRCH and report friendly "already gone" message.
+$SW --data-dir "$DOG" stop
+# Expected: "daemon already gone (pid $RUNPID not found; lock file is stale...)"
+# Expected exit: 0
+
+# (f) Lock file IS still on disk after the friendly stop (we don't auto-remove).
+ls "$DOG/sharedwatch.lock" && echo "still present"
+# Expected: still present.
+
+# (g) New `run` should acquire the lock cleanly — flock releases on process
+#     death even without unlock, so the new fcntl-style lock succeeds and
+#     overwrites the PID.
+$SW --data-dir "$DOG" run >"$DOG/run2.log" 2>&1 &
+NEWPID=$!
+sleep 1
+cat "$DOG/sharedwatch.lock"
+# Expected: $NEWPID (overwritten by the new process)
+
+# (h) Clean shutdown of the recovered daemon.
+$SW --data-dir "$DOG" stop
+```
+
+**What this exercises:** `internal/app/lock.go` semantics; ESRCH path in `cmd/sharedwatch/stop.go`; the POSIX `flock(2)` release-on-exit guarantee.
+
+**Pass criteria:** (e) reports friendly stale-PID line and exits 0; (g) successfully acquires the lock; (h) cleans up.
+
+**Recorded run:** see worklog.
+
+---
+
+## 23 — Misbehaving agent — text vs JSON error parity (v0.0.7)
+
+**Goal:** agents pass bad input to various format-aware commands. Errors should be **plain text on stderr** in default text mode (exit 1) and **JSON envelope on stdout** when `--format json|jsonl` is set (exit 1). Same logical error → same code in JSON; same human message in text.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-23
+rm -rf "$DOG" && mkdir -p "$DOG"
+$SW --data-dir "$DOG" init >/dev/null
+```
+
+**Actions + expected (text mode):**
+
+```bash
+# (a-text) bad --since on events list
+$SW --data-dir "$DOG" events list --since not-a-time 2>&1; echo "exit=$?"
+# Expected on stderr: error: --since: not a valid RFC3339 timestamp or duration: "not-a-time"
+# Expected exit: 1
+
+# (b-text) garbage SQL
+$SW --data-dir "$DOG" sql "GARBAGE QUERY" 2>&1; echo "exit=$?"
+# Expected on stderr: error: non-SELECT statements require --write...
+# Expected exit: 2 (sql special-cases this for the hint)
+
+# (c-text) unknown schema table
+$SW --data-dir "$DOG" schema unknown_table 2>&1; echo "exit=$?"
+# Expected on stderr: error: no such table: unknown_table
+# Expected exit: 1
+
+# (d-text) events stats with no --root
+$SW --data-dir "$DOG" events stats 2>&1; echo "exit=$?"
+# Expected on stderr: error: events stats requires --root <label>...
+# Expected exit: 1
+```
+
+**Actions + expected (JSON mode — flags before positional args):**
+
+```bash
+# (a-json)
+$SW --data-dir "$DOG" events list --format jsonl --since not-a-time
+# Expected on stdout: {"format_version":1,"error":{"code":"bad_flag","message":"--since: not a valid RFC3339 ..."}}
+
+# (b-json)
+$SW --data-dir "$DOG" sql --format jsonl "GARBAGE QUERY"
+# Expected on stdout: {"format_version":1,"error":{"code":"bad_flag","message":"non-SELECT statements require --write ..."}}
+
+# (c-json)
+$SW --data-dir "$DOG" schema --format jsonl unknown_table
+# Expected on stdout: {"format_version":1,"error":{"code":"not_found","message":"no such table: unknown_table"}}
+
+# (d-json)
+$SW --data-dir "$DOG" events stats --format jsonl
+# Expected on stdout: {"format_version":1,"error":{"code":"bad_flag","message":"events stats requires --root <label>..."}}
+```
+
+**What this exercises:** `fatalJSON` wiring across all 5 format-aware handlers (`events list`, `events stats`, `sql`, `schema`, `overview`); the canonical error-code vocabulary; the "JSON to stdout, text to stderr" contract.
+
+**Pass criteria:** every text-mode case has the same human message; every JSON-mode case is a parseable envelope with the right `code` value.
+
+**Known gotcha (for the system prompt):** `--format` must appear **before** any positional argument (e.g. before the SQL string) for Go's stdlib `flag` parser to see it. `sharedwatch sql "X" --format jsonl` is parsed as `sql "X"` ignoring the trailing flag.
+
+**Recorded run:** see worklog.
+
+---
+
+## 24 — Multi-agent lease warning (v0.0.7)
+
+**Goal:** when actor B writes inside the path-glob of an active lease held by actor A, the watcher (and reconciler) log a **structured `slog.Warn` line** with `event_id`, `rel_path`, `watch_root`, `event_actor`, `lease_id`, `lease_actor`, `lease_path_glob`, `lease_expires_at`. Verify a cooperative B can see the warning and decide whether to back off.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-24
+rm -rf "$DOG" && mkdir -p "$DOG"
+$SW --data-dir "$DOG" init >/dev/null
+
+# Start daemon with JSON logging so we can grep structured fields.
+$SW --data-dir "$DOG" --log-format json run >"$DOG/run.log" 2>&1 &
+RUNPID=$!
+sleep 1
+```
+
+**Actions + expected:**
+
+```bash
+# (a) Actor A heartbeats + acquires a lease on auth/**
+$SW --data-dir "$DOG" actor heartbeat claude-a --kind ai_agent --focus 'auth/**'
+$SW --data-dir "$DOG" lease acquire 'auth/**' --actor claude-a --ttl 5m
+
+# (b) Actor B writes inside the leased glob. Watcher should detect.
+$SW --data-dir "$DOG" --actor claude-b test emit auth/login.go
+
+# (c) Give the watcher a beat, then check the log for the structured warning.
+sleep 2
+grep -E '"msg":"lease_violation"|"lease_actor":"claude-a"' "$DOG/run.log"
+# Expected: at least one log line with both lease_actor=claude-a AND
+# event_actor=claude-b (or similar — exact field names per the SW-AGENT-12
+# implementation in internal/watcher/service.go).
+
+# (d) Clean shutdown.
+$SW --data-dir "$DOG" stop
+```
+
+**What this exercises:** `db.LeaseGlobMatchesPath` from SW-AGENT-12; the watcher's slog.Warn emission on lease violations; the multi-actor cooperation pattern.
+
+**Pass criteria:** the structured warning fires for the cross-actor write; the relevant fields are present in the log line.
+
+**Known gotcha (for the system prompt):** lease warnings go to **logs** (slog.Warn), not the journal. An agent that wants programmatic notification of lease violations must tail the log file OR file-watch for the warning OR ask the orchestrator to scrape stderr. Building a journal-side notification is filed as a future-consideration in [`../design/hooks-discussion-20260524.md`](../design/hooks-discussion-20260524.md).
+
+**Recorded run:** see worklog.

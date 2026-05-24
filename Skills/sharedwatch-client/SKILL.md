@@ -72,6 +72,27 @@ export SHAREDWATCH_HINTS=agent                     # rich next[] hints
 sharedwatch config show
 # (or `sharedwatch config show --json` for machine-readable)
 
+# KNOWN GOTCHAS (surfaced by dogfood scenarios 21–24, v0.0.7).
+# Read once, internalise, save yourself the debug loop:
+#
+# 1. --format must come BEFORE positional args. Go's stdlib flag parser
+#    stops at the first non-flag, so `sharedwatch sql "SELECT ..." --format jsonl`
+#    silently drops the trailing flag. Use `sharedwatch sql --format jsonl "..."`
+#    OR set SHAREDWATCH_FORMAT=jsonl once and forget the flag entirely.
+#
+# 2. --data-dir alone does NOT move watch_path/db_path. They stay at XDG
+#    defaults, giving you a split install. Prefer `XDG_DATA_HOME=/tmp/X`
+#    (single override) or pass --data-dir/--watch-path/--db as a trio.
+#
+# 3. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
+#    real file changes the watcher picks up, NOT on `test emit`. To
+#    exercise the lease path, write a file to the watched dir and let
+#    the watcher detect it; `test emit` skips the lease check.
+#
+# 4. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
+#    Older docs may show `acquire`; the binary only accepts grant/release/
+#    renew/list.
+
 # 3. "What's new since I last looked?" — idempotent across calls
 sharedwatch events list --cursor-name <your-actor-id> \
   --limit 50 --format jsonl

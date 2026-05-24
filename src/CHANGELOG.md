@@ -4,6 +4,30 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — `fatalJSON` extended to all format-aware handlers (SW-AGENT-20)
+- `events stats`, `sql`, `schema`, `overview` now emit JSON-structured errors on stdout when `--format json|jsonl` is set, matching `events list`'s behaviour from v0.0.6. Consumers reading the JSON envelope no longer have to multiplex stderr to get the error.
+- Same canonical error-code vocabulary (`bad_flag` / `not_found` / `permission` / `db_error` / `network_error` / `internal`).
+
+### Fixed — `SHAREDWATCH_*` env vars now reach `test emit`'s payload (SW-AGENT-20 dogfood)
+- Surfaced by scenario 21: `SHAREDWATCH_ACTOR=x sharedwatch test emit foo.md` was producing events with no actor (the env-derived attribution flowed to the watcher path but not the synthetic-emit path). The merge result was being discarded by handleTest's `rootAttr.merge(subAttr)` call.
+- Fix: replace `rootAttr` in-place with the merged result so every downstream consumer sees env + config defaults.
+
+### Fixed — `sharedwatch stop` now detects all "process already gone" errors (SW-AGENT-20 dogfood)
+- Surfaced by scenario 22: ESRCH-only check missed Go's wrapped `os.ErrProcessDone`, so a stale-lock SIGTERM printed an ugly error instead of the friendly "daemon already gone" message.
+- Fix: also match `os.ErrProcessDone` in the early-return path.
+
+### Fixed — doc drift: `lease grant` (not `lease acquire`) (SW-AGENT-20 dogfood)
+- The binary's lease vocabulary is `grant | release | renew | list`. Recent README / help banner / man page erroneously said `lease acquire`. Surfaced by scenario 24.
+- Fix: replaced `lease acquire` with `lease grant` in `src/cmd/sharedwatch/main.go` usage(), top-level `README.md`, and `man/sharedwatch.1`.
+
+### Added — dogfood scenarios 21–24 + "Known gotchas" feedback loop
+- Scenarios 21–24 in [`docs/dogfood/test_dogfood.md`](../docs/dogfood/test_dogfood.md) cover canonical-with-env-vars, stale-lock-recovery, error-parity-text-vs-JSON, multi-agent lease warning. Each was executed end-to-end against the v0.0.7 binary; actual outputs recorded in [`tickets/tasklist_20260524_053824.md`](../tickets/tasklist_20260524_053824.md) worklog.
+- Findings fed back into [`docs/agent/agent-system-prompt-20260522.md`](../docs/agent/agent-system-prompt-20260522.md) as a new "Known gotchas (surfaced by dogfood)" block, and into [`Skills/sharedwatch-client/SKILL.md`](../Skills/sharedwatch-client/SKILL.md) as a comment block in the agent-startup ritual.
+- The user explicitly asked for this self-improvement loop: dogfood → finding → updated agent docs so the next agent doesn't repeat the same mistake.
+
+### Open follow-up
+- `--data-dir <X>` alone does not re-derive `watch_path` or `db_path` — they stay at XDG defaults, producing a split installation. Surfaced by scenario 21. Workaround documented in agent-system-prompt gotchas (use `XDG_DATA_HOME` instead). Fix deferred to a follow-up ticket — needs decision on whether `--data-dir` should be a "smart umbrella override" (re-derives) or stay narrow (current).
+
 ### Added — `--quiet` global flag (SW-AGENT-19)
 - Suppresses the `Next:` hint block on every command (overrides any `--hints` profile resolution) AND the friendly informational lines on `init` ("watch_path=…"), `stop` ("sent SIGTERM…" / "daemon stopped cleanly" / "no running daemon"). Data output and errors are unaffected.
 - Standard convention (matches `git --quiet`, `gh --quiet`). Useful when piping captured output into log parsers that get confused by the human-friendly noise.
