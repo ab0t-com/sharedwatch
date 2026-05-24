@@ -9,13 +9,13 @@ A single Go binary that watches a folder on disk, captures every change into a S
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ab0t/sharedwatch/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ab0t-com/sharedwatch/main/scripts/install.sh | bash
 ```
 
 Or clone and build locally:
 
 ```bash
-git clone https://github.com/ab0t/sharedwatch
+git clone https://github.com/ab0t-com/sharedwatch
 cd sharedwatch
 ./scripts/rebuild.sh          # fmt + vet + test + build into src/.bin/sharedwatch
 ```

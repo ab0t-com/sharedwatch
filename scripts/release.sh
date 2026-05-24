@@ -122,7 +122,7 @@ log "writing dist/manifest.yaml"
   echo "version: $VERSION"
   echo "license: MIT"
   echo "released_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  echo "source: \"https://github.com/${SHAREDWATCH_REPO:-ab0t/sharedwatch}\""
+  echo "source: \"https://github.com/${SHAREDWATCH_REPO:-ab0t-com/sharedwatch}\""
   echo "artifacts:"
   for t in "${tarballs[@]}"; do
     sz=$(stat -c %s "$DIST/$t" 2>/dev/null || stat -f %z "$DIST/$t")

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>sharedwatch — calm collaboration bus for a local shared folder</title>
   <meta name="description" content="A single Go binary that watches a local folder, captures every change into a SQLite-backed queue, and serves it back on your own cadence. MIT-licensed.">
-  <link rel="canonical" href="https://github.com/ab0t/sharedwatch">
+  <link rel="canonical" href="https://github.com/ab0t-com/sharedwatch">
   <style>
     :root {
       --fg: #1a1a1a;
@@ -133,10 +133,10 @@
   </nav>
 
   <h2 id="install">Install</h2>
-  <pre><code>curl -fsSL https://raw.githubusercontent.com/ab0t/sharedwatch/main/scripts/install.sh | bash</code></pre>
+  <pre><code>curl -fsSL https://raw.githubusercontent.com/ab0t-com/sharedwatch/main/scripts/install.sh | bash</code></pre>
   <p class="annot">The installer checks SHA-256 against the release manifest before writing. Local-dev mode is auto-detected when run inside a checkout (uses <code>scripts/rebuild.sh</code> instead of downloading).</p>
 
-  <p>Or grab a tagged release tarball from the <a href="https://github.com/ab0t/sharedwatch/releases">releases page</a>.</p>
+  <p>Or grab a tagged release tarball from the <a href="https://github.com/ab0t-com/sharedwatch/releases">releases page</a>.</p>
 
   <h2 id="what">What it is (and isn't)</h2>
   <div class="grid-2">
@@ -154,7 +154,7 @@
     <div>
       <h3>It is not</h3>
       <ul>
-        <li>Not a git replacement — it records that a file changed, not byte-level history. (See <a href="https://github.com/ab0t/sharedwatch/blob/main/docs/design/design-questions-20260523.md">design-questions Q1</a>.)</li>
+        <li>Not a git replacement — it records that a file changed, not byte-level history. (See <a href="https://github.com/ab0t-com/sharedwatch/blob/main/docs/design/design-questions-20260523.md">design-questions Q1</a>.)</li>
         <li>Not a multi-host file share or sync service.</li>
         <li>Not push-based — readers pull on their own cadence (passive 10 min, active 5 s).</li>
         <li>Not a high-throughput pipeline — low-to-moderate write volume is the design centre.</li>
@@ -448,11 +448,11 @@ dgs_177956...  2026-05-23T23:40:00Z events=3  status=read    Shared drive digest
   <div class="terminal"><span class="prompt">$</span> sharedwatch update
 <span class="out">current version:  v0.0.2
 target version:   v0.0.3
-repo:             ab0t/sharedwatch
+repo:             ab0t-com/sharedwatch
 platform:         linux_amd64
 binary path:      /home/you/.local/bin/sharedwatch
-download:         https://github.com/ab0t/sharedwatch/releases/download/v0.0.3/sharedwatch_0.0.3_linux_amd64.tar.gz
-manifest:         https://github.com/ab0t/sharedwatch/releases/download/v0.0.3/manifest.yaml
+download:         https://github.com/ab0t-com/sharedwatch/releases/download/v0.0.3/sharedwatch_0.0.3_linux_amd64.tar.gz
+manifest:         https://github.com/ab0t-com/sharedwatch/releases/download/v0.0.3/manifest.yaml
 
 DRY RUN — no changes made. To apply: sharedwatch update --apply</span>
 
@@ -504,13 +504,13 @@ separately, every reconcile_interval (default 30m):
 
   <h2 id="links">Source, license, related docs</h2>
   <ul>
-    <li><a href="https://github.com/ab0t/sharedwatch">Source on GitHub</a></li>
-    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/README.md">Top-level README (orientation)</a></li>
-    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/src/README.md">Program README (full)</a></li>
-    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/src/CHANGELOG.md">Changelog</a></li>
-    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/src/CONTRIBUTING.md">Contributing + versioning policy</a></li>
-    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/docs/README.md">docs/ manifest (design, reports, specs, agent docs, dogfood)</a></li>
-    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/LICENSE">License (MIT)</a></li>
+    <li><a href="https://github.com/ab0t-com/sharedwatch">Source on GitHub</a></li>
+    <li><a href="https://github.com/ab0t-com/sharedwatch/blob/main/README.md">Top-level README (orientation)</a></li>
+    <li><a href="https://github.com/ab0t-com/sharedwatch/blob/main/src/README.md">Program README (full)</a></li>
+    <li><a href="https://github.com/ab0t-com/sharedwatch/blob/main/src/CHANGELOG.md">Changelog</a></li>
+    <li><a href="https://github.com/ab0t-com/sharedwatch/blob/main/src/CONTRIBUTING.md">Contributing + versioning policy</a></li>
+    <li><a href="https://github.com/ab0t-com/sharedwatch/blob/main/docs/README.md">docs/ manifest (design, reports, specs, agent docs, dogfood)</a></li>
+    <li><a href="https://github.com/ab0t-com/sharedwatch/blob/main/LICENSE">License (MIT)</a></li>
   </ul>
 
   <footer>

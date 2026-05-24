@@ -19,18 +19,18 @@
 #   - Verifies the downloaded tarball's SHA-256 against the manifest.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ab0t/sharedwatch/main/scripts/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/ab0t-com/sharedwatch/main/scripts/install.sh | bash
 #   # or:
 #   ./scripts/install.sh [--prefix DIR] [--version vX.Y.Z] [--yes]
 #
 # Env:
 #   SHAREDWATCH_DEV=1      force local-dev mode even outside the repo
-#   SHAREDWATCH_REPO       override default repo (default: ab0t/sharedwatch)
+#   SHAREDWATCH_REPO       override default repo (default: ab0t-com/sharedwatch)
 #   PREFIX                 install prefix (default: $HOME/.local)
 
 set -euo pipefail
 
-REPO="${SHAREDWATCH_REPO:-ab0t/sharedwatch}"
+REPO="${SHAREDWATCH_REPO:-ab0t-com/sharedwatch}"
 PREFIX="${PREFIX:-$HOME/.local}"
 VERSION=""
 ASSUME_YES=0

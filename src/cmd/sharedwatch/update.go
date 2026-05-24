@@ -41,7 +41,7 @@ func handleUpdate(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
 	apply := fs.Bool("apply", false, "actually perform the update (default: check only, no changes)")
 	wantVersion := fs.String("version", "", "target version tag (default: latest release on GitHub)")
-	repo := fs.String("repo", "ab0t/sharedwatch", "GitHub repo to fetch from")
+	repo := fs.String("repo", "ab0t-com/sharedwatch", "GitHub repo to fetch from")
 	assumeYes := fs.Bool("yes", false, "skip the interactive confirmation when --apply")
 	timeout := fs.Duration("timeout", 60*time.Second, "network operation timeout")
 	_ = fs.Parse(args)

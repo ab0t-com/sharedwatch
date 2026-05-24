@@ -7,7 +7,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 ### Added — `update` subcommand (safe self-updater)
 - `sharedwatch update` prints the current version, the latest release tag fetched from GitHub, the target download URL and binary path, then exits. No changes by default.
 - `sharedwatch update --apply` downloads the platform tarball + `manifest.yaml` from the release, verifies the tarball's SHA-256 against the manifest entry, extracts the binary, smoke-tests it (`<new> version` must report a sharedwatch banner), then atomic-renames it over the running binary. Cowardly refuses to install if the binary's parent directory isn't writable by the current user (no `sudo` escalation).
-- `--version vX.Y.Z` pins a target tag; `--repo owner/repo` overrides the default `ab0t/sharedwatch`; `--yes` skips the interactive confirmation; `--timeout 60s` bounds network operations.
+- `--version vX.Y.Z` pins a target tag; `--repo owner/repo` overrides the default `ab0t-com/sharedwatch`; `--yes` skips the interactive confirmation; `--timeout 60s` bounds network operations.
 - Safe to run while a daemon is active: atomic rename(2) on Linux/macOS leaves the running process's inode untouched. The new binary takes effect when the daemon is next restarted.
 - Lives in `cmd/sharedwatch/update.go`; uses only stdlib (`net/http`, `crypto/sha256`, `archive/tar`, `compress/gzip`). No new module deps.
 

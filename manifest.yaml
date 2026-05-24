@@ -14,8 +14,8 @@ name: sharedwatch
 description: Calm, durable, pull-based activity feed for a local shared folder.
 license: MIT
 license_file: LICENSE
-source: "https://github.com/ab0t/sharedwatch"
-homepage: "https://github.com/ab0t/sharedwatch"
+source: "https://github.com/ab0t-com/sharedwatch"
+homepage: "https://github.com/ab0t-com/sharedwatch"
 
 # Replaced per-release by scripts/release.sh
 version: "0.0.0-unreleased"
