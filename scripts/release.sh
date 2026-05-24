@@ -142,9 +142,15 @@ ls -la "$DIST"
 
 cat <<EOF
 
-Next steps (you, not this script):
-  git tag -a $VERSION -m "release $VERSION"
-  git push origin $VERSION
-  gh release create $VERSION dist/*.tar.gz dist/manifest.yaml \\
-    --title "$VERSION" --notes-file src/CHANGELOG.md
+Next steps (you, not this script). Per GITOPS.md §10 we ship in-repo
+under release/, not via GitHub Releases or gh CLI:
+
+  mkdir -p release/$VERSION
+  mv dist/sharedwatch_*.tar.gz dist/manifest.yaml release/$VERSION/
+  echo "$VERSION" > release/LATEST
+  git add release/$VERSION release/LATEST
+  git commit -m "release: $VERSION artifacts"
+  git tag -a $VERSION HEAD -m "$VERSION — <one-line summary>"
+  git branch $VERSION HEAD
+  git push origin refs/heads/main refs/heads/$VERSION refs/tags/$VERSION
 EOF

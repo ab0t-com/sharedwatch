@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -59,18 +58,23 @@ func handleUpdate(ctx context.Context, args []string) {
 	httpCtx, cancel := context.WithTimeout(ctx, *timeout)
 	defer cancel()
 
+	// Releases are committed to the repo under release/vX.Y.Z/ and served
+	// via raw.githubusercontent.com (see GITOPS.md §10). Same path scheme as
+	// scripts/install.sh — keeps install and update consistent.
+	rawBase := fmt.Sprintf("https://raw.githubusercontent.com/%s/main", *repo)
+
 	target := *wantVersion
 	if target == "" {
-		latest, err := fetchLatestTag(httpCtx, *repo)
+		latest, err := fetchLatestFromRepo(httpCtx, rawBase)
 		if err != nil {
-			fatal(fmt.Errorf("fetch latest release tag from github.com/%s: %w", *repo, err))
+			fatal(fmt.Errorf("read release/LATEST from %s: %w", *repo, err))
 		}
 		target = latest
 	}
 
 	platform := fmt.Sprintf("%s_%s", runtime.GOOS, runtime.GOARCH)
 	tarball := fmt.Sprintf("sharedwatch_%s_%s.tar.gz", strings.TrimPrefix(target, "v"), platform)
-	base := fmt.Sprintf("https://github.com/%s/releases/download/%s", *repo, target)
+	base := fmt.Sprintf("%s/release/%s", rawBase, target)
 	tarURL := base + "/" + tarball
 	manifestURL := base + "/manifest.yaml"
 
@@ -171,13 +175,14 @@ func handleUpdate(ctx context.Context, args []string) {
 	fmt.Println("if a daemon is running, restart it to pick up the new binary")
 }
 
-func fetchLatestTag(ctx context.Context, repo string) (string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
+// fetchLatestFromRepo reads release/LATEST from raw.githubusercontent.com.
+// The file is one line of text: the version tag (e.g. "v0.0.2").
+func fetchLatestFromRepo(ctx context.Context, rawBase string) (string, error) {
+	url := rawBase + "/release/LATEST"
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "sharedwatch-update/"+Version)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -185,19 +190,17 @@ func fetchLatestTag(ctx context.Context, repo string) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-		return "", fmt.Errorf("github api returned HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return "", fmt.Errorf("GET %s -> HTTP %d", url, resp.StatusCode)
 	}
-	var out struct {
-		TagName string `json:"tag_name"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64))
+	if err != nil {
 		return "", err
 	}
-	if out.TagName == "" {
-		return "", errors.New("github api returned no tag_name (no releases yet?)")
+	tag := strings.TrimSpace(string(body))
+	if tag == "" {
+		return "", errors.New("release/LATEST is empty")
 	}
-	return out.TagName, nil
+	return tag, nil
 }
 
 func downloadFile(ctx context.Context, url, dst string) error {

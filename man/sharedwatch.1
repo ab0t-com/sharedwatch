@@ -1,0 +1,305 @@
+.\" sharedwatch(1) — manual page
+.\" Install: cp man/sharedwatch.1 /usr/local/share/man/man1/ && sudo mandb
+.\" View:    man sharedwatch
+.\"
+.\" Source of truth for the program: src/cmd/sharedwatch/main.go
+.\" When commands or flags change, update this file in the same PR.
+.TH SHAREDWATCH 1 "2026-05-24" "v0.0.2" "User Commands"
+.SH NAME
+sharedwatch \- calm, pull-based activity journal for a local shared folder
+.SH SYNOPSIS
+.B sharedwatch
+[\fIglobal flags\fR] \fIcommand\fR [\fIcommand flags\fR] [\fIargs\fR]
+.SH DESCRIPTION
+.B sharedwatch
+is a single Go binary that watches one or more folders on disk and writes
+every observed change into a durable, SQLite-backed event journal. A separate
+consumer runs on its own cadence (passive every 10 min by default, active
+every 5 s) and turns batches of events into reviewable digests.
+.PP
+The watcher and consumer never communicate directly \(em they share one DB.
+The watcher writes events; the consumer pulls. A reconcile loop runs every
+30 min as a safety net to catch anything the watcher missed.
+.PP
+Multiple folders can be watched by one daemon with stable labels
+(\fB--root\fR \fIlabel\fR=\fIpath\fR). Every event carries a
+\fBpayload_json\fR v1 envelope with optional \fBactor\fR, \fBsession\fR,
+\fBtask\fR, \fBintent\fR, \fBaddressee\fR, \fBref_event_id\fR, and \fBtags\fR
+fields for multi-writer coordination.
+.SH COMMANDS
+.TP
+.B init
+Create the data dir and DB; print the resolved paths.
+.TP
+.B run
+Start the watcher + consumer + reconcile loop. One per data dir; a file
+lock at \fI<data_dir>/sharedwatch.lock\fR prevents two daemons racing.
+.TP
+.B status \fR[\fB--json\fR] [\fB--actors\fR]
+Print current mode, queue depth, last consumer/reconcile run.
+With \fB--actors\fR includes the actors registry.
+.TP
+.B roots \fR[\fB--json\fR]
+List the folders being watched. Works for both single and multi-root setups.
+The default (\fIsingle-root\fR) entry has an empty label and points at
+\fI$XDG_DATA_HOME/sharedwatch/watch\fR unless overridden.
+.TP
+.B mode active \fR[\fB--ttl\fR \fIduration\fR]
+Enable active mode (consumer runs every 5 s) for the given TTL. Each
+successful consume extends the TTL.
+.TP
+.B mode passive
+Force passive mode (consumer runs every 10 min).
+.TP
+.B consume
+Process pending events once and create a digest. Useful for cron-driven
+external schedulers.
+.TP
+.B digest list \fR[\fB--limit\fR \fIN\fR]
+List recent digests, newest first.
+.TP
+.B digest show \fIid\fR
+Print one digest in full and mark it read.
+.TP
+.B digest archive \fIid\fR
+Mark a digest archived.
+.TP
+.B reconcile now
+Run the reconcile pass immediately.
+.TP
+.B events list \fR[\fIflags\fR]
+Read-only query against the events table. Flags include \fB--since\fR
+(RFC3339 timestamp or duration like \fI5m\fR), \fB--type\fR, \fB--source\fR,
+\fB--status\fR, \fB--producer\fR, \fB--path-glob\fR, \fB--limit\fR,
+\fB--order\fR (asc|desc), \fB--format\fR (text|json|jsonl|csv),
+\fB--fields\fR (comma-separated projection), \fB--since-cursor\fR (stateless
+token), \fB--cursor-name\fR (server-side named cursor that advances on read),
+\fB--no-advance\fR, \fB--payload-key\fR/\fB--payload-value\fR (post-fetch
+filter), and \fB--root\fR (filter by watch-root label).
+.TP
+.B events stats \fR\fB--root\fR \fIlabel\fR
+Per-root aggregate counts. Required scope (one root) keeps the response
+bounded and forces agents to choose the dimension before drilling.
+.TP
+.B events cursor list|reset \fIname\fR|set \fIname\fR|encode|decode
+Manage server-side iteration cursors.
+.TP
+.B events retry \fR[\fB--max-retries\fR \fIN\fR]
+Requeue failed events back to pending.
+.TP
+.B events recover-stuck \fR[\fB--older-than\fR \fIduration\fR]
+Flip events stuck in 'processing' state back to pending. Default cutoff 5m.
+.TP
+.B overview \fR[\fB--format\fR text|json] [\fB--since\fR \fIduration\fR]
+Cross-root L1 summary with by-type counts, top actors, and a \fIdrill\fR map
+of pre-computed follow-up commands.
+.TP
+.B sql \fIstmt\fR|-|\fB--file\fR \fIpath\fR \fR[\fB--write\fR] [\fB--format\fR text|json|jsonl|csv]
+Run a SQL query. SELECT/WITH/EXPLAIN/PRAGMA table_info only by default.
+\fB--write\fR allows mutations \(em a tripwire, not a security boundary.
+.TP
+.B schema \fR[\fItable\fR] [\fB--format\fR text|json]
+Print live DDL from the DB.
+.TP
+.B actor heartbeat \fIactor-id\fR \fR[\fB--focus\fR \fIglob\fR] [\fB--kind\fR \fIk\fR] [\fB--label\fR \fIl\fR] [\fB--metadata\fR \fIjson\fR]
+Register or heartbeat an actor in the actors registry.
+.TP
+.B intent declare \fIpath\fR \fB--actor\fR \fIid\fR \fR[\fB--ttl\fR \fId\fR] [\fB--intent\fR \fItext\fR]
+Cooperative intent declaration on a path. Peer agents SHOULD respect it.
+.TP
+.B lease acquire \fIpath-glob\fR \fB--actor\fR \fIid\fR \fR[\fB--ttl\fR \fId\fR]
+Acquire an advisory lease on a path-glob. The watcher logs a warning when
+another actor writes to the locked area.
+.TP
+.B test emit \fR[\fIrelpath\fR] [\fB--payload\fR \fIjson\fR | attribution flags]
+Inject a synthetic event for end-to-end testing. The \fB--payload\fR raw
+JSON form and the attribution flags (\fB--actor\fR \fIetc\fR) are mutually
+exclusive.
+.TP
+.B update \fR[\fB--apply\fR] [\fB--version\fR \fItag\fR] [\fB--repo\fR \fIowner/repo\fR] [\fB--yes\fR] [\fB--timeout\fR \fIduration\fR]
+Check for or install a newer release. Dry-run by default. With
+\fB--apply\fR: downloads the tarball + manifest.yaml from
+\fIraw.githubusercontent.com\fR, SHA-256 verifies, smoke-tests the new
+binary, then atomic-renames it over the current path. Refuses if the
+binary's parent directory isn't writable by the current user (no sudo
+escalation). Safe to run while a daemon is active.
+.TP
+.B version
+Print version and exit.
+.TP
+.B help
+Print the embedded help.
+.SH GLOBAL FLAGS
+.TP
+.BR --config " " \fIpath\fR
+Config file (default \fIconfig.yaml\fR; silently ignored if missing).
+.TP
+.BR --watch-path " " \fIdir\fR
+Override the single watch path. Repeatable (comma-aware) for multi-root.
+Use \fB--root\fR for explicitly labelled multi-root setups.
+.TP
+.BR --root " " \fIlabel\fR=\fIpath\fR
+Register a watch root (definition only on the root flagset). With just
+\fIlabel\fR (no \fI=path\fR) on a subcommand flagset, filters by that root.
+Repeatable.
+.TP
+.BR --db " " \fIfile\fR
+Override the SQLite DB path.
+.TP
+.BR --data-dir " " \fIdir\fR
+Override the data directory.
+.TP
+.BR --ignore " " \fIpattern\fR
+Extra ignore pattern. Repeatable, comma-aware. Appended to the default list.
+.TP
+.BR --include " " \fIpattern\fR
+Include-only filter, applied before ignores. Repeatable, comma-aware.
+Empty (default) means include all.
+.TP
+.BR --hash " " on|off
+Enable per-file SHA-256 content hashing during snapshot building. Default off.
+.TP
+.BR --producer " " \fIid\fR
+Override the \fBproducer_id\fR stamped on emitted events. Default
+\fI<host>:<pid>\fR.
+.TP
+.BR --log-format " " text|json
+Log format. Default \fItext\fR.
+.TP
+.BR --log-level " " debug|info|warn|error
+Log level. Default \fIinfo\fR.
+.TP
+.BR --version
+Same as the \fBversion\fR subcommand.
+.SH ATTRIBUTION FLAGS
+Available on the root flagset (apply to every event the daemon emits during
+this lifetime) and on \fBtest emit\fR (override per-event). Populate the
+\fBpayload_json\fR v1 envelope.
+.TP
+.BR --actor " " \fIid\fR
+Stable id of the writer. Required to use any other attribution flag.
+.TP
+.BR --actor-kind " " human|ai_agent|automation
+Kind of writer.
+.TP
+.BR --session " " \fIid\fR
+Logical-run identifier; convention \fIsess-YYYY-MM-DD-<short>\fR.
+.TP
+.BR --task " " \fIlabel\fR
+Short human-meaningful work label.
+.TP
+.BR --intent " " \fItext\fR
+One-sentence reason.
+.TP
+.BR --addressee " " \fIid\fR
+Who the change is FOR (peer agent or human).
+.TP
+.BR --ref " " \fIevent-id\fR
+Causal predecessor event id (sets \fBref_event_id\fR).
+.TP
+.BR --tag " " \fItag\fR
+Repeatable, comma-aware. Sets \fBpayload_json.tags[]\fR.
+.SH EXAMPLES
+First-time setup:
+.PP
+.RS
+.EX
+sharedwatch init
+sharedwatch run &
+.EE
+.RE
+.PP
+See what is being watched:
+.PP
+.RS
+.EX
+sharedwatch roots
+sharedwatch roots --json
+.EE
+.RE
+.PP
+Multi-root with labels:
+.PP
+.RS
+.EX
+sharedwatch --root auth=/work/auth --root billing=/work/billing run &
+sharedwatch --root auth events list --since 1h --format jsonl
+.EE
+.RE
+.PP
+Attribute every event from this invocation:
+.PP
+.RS
+.EX
+sharedwatch --actor claude-coord --task refactor-auth \\
+            --intent "split monolithic login.go" run
+.EE
+.RE
+.PP
+Incremental cursor-based read for an agent:
+.PP
+.RS
+.EX
+sharedwatch events list --cursor-name my-agent --format jsonl
+.EE
+.RE
+.PP
+Smoke test the full pipeline:
+.PP
+.RS
+.EX
+sharedwatch test emit hello.md --actor demo --task quick-smoke
+sharedwatch consume
+sharedwatch digest list
+.EE
+.RE
+.PP
+Keep the binary current:
+.PP
+.RS
+.EX
+sharedwatch update              # dry-run, no changes
+sharedwatch update --apply      # download + SHA-256 verify + atomic swap
+.EE
+.RE
+.SH FILES
+.TP
+.I $XDG_DATA_HOME/sharedwatch/watch
+Default watched folder.
+.TP
+.I $XDG_DATA_HOME/sharedwatch/queue.db
+Default SQLite DB. WAL mode; foreign-key cascade enabled.
+.TP
+.I $XDG_DATA_HOME/sharedwatch/sharedwatch.lock
+File lock held by the active \fBrun\fR process to prevent concurrent
+daemons. PID of the holder is written to the file.
+.TP
+.I ./config.yaml
+Optional config file searched in the current working directory. Silently
+ignored if missing. Override with \fB--config\fR.
+.SH ENVIRONMENT
+.TP
+.B XDG_DATA_HOME
+Base directory for default \fIdata_dir\fR. Defaults to
+\fI$HOME/.local/share\fR when unset.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Operational failure (DB error, file I/O, network error during \fBupdate\fR).
+.TP
+.B 2
+Usage error (unknown subcommand, malformed flags).
+.SH SEE ALSO
+The full README, design discussions, and dogfood scenarios live in the
+source repository at \fIhttps://github.com/ab0t-com/sharedwatch\fR. The
+\fBdocs/\fR directory in the repo carries design discussions, engineering
+reports, and runnable test scenarios.
+.SH AUTHORS
+sharedwatch is maintained by the ab0t.com team.
+.SH BUGS
+Report at \fIhttps://github.com/ab0t-com/sharedwatch/issues\fR.
+.SH LICENSE
+MIT. See \fILICENSE\fR at the source repo.

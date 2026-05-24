@@ -4,6 +4,19 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — `roots` subcommand
+- `sharedwatch roots` prints the list of watched folders as a labelled table (LABEL, PATH, PENDING, LAST EVENT). Works for both single-root (synthesises a `(default)` row from `Cfg.WatchPath`) and multi-root setups. `--json` emits a `format_version: 1` envelope with a `mode` field (`single`|`multi`) and a `roots[]` array.
+- Closes the recurring UX question of "what folders is sharedwatch listening to?" — previously discoverable only via `status --json | jq '.roots'`, which returned empty in single-root mode.
+- Lives in `cmd/sharedwatch/roots.go`. Uses `text/tabwriter` for column alignment, no new module deps.
+
+### Changed — help text + man page
+- Expanded the embedded `sharedwatch help`: added the `roots` row, an explicit "DEFAULT PATHS" section explaining `$XDG_DATA_HOME/sharedwatch/{watch,queue.db}` defaults, and an EXAMPLES section with 9 concrete invocations (first-time setup, multi-root, attribution, cursors, schema discovery, SQL, smoke test, update).
+- New `man/sharedwatch.1` man page (nroff). Install with `cp man/sharedwatch.1 /usr/local/share/man/man1/ && sudo mandb`; view with `man sharedwatch`. Covers every command, flag, and attribution field with examples.
+
+### Changed — `update` now reads release/LATEST from raw.githubusercontent.com
+- `sharedwatch update` no longer hits the GitHub Releases API (which we don't use); fetches `https://raw.githubusercontent.com/<repo>/main/release/LATEST` to resolve the latest version, then downloads from `release/<tag>/`. Matches the install.sh flow.
+- The old `fetchLatestTag` helper (GitHub API + `tag_name` parsing) is gone; replaced with `fetchLatestFromRepo`.
+
 ### Added — `update` subcommand (safe self-updater)
 - `sharedwatch update` prints the current version, the latest release tag fetched from GitHub, the target download URL and binary path, then exits. No changes by default.
 - `sharedwatch update --apply` downloads the platform tarball + `manifest.yaml` from the release, verifies the tarball's SHA-256 against the manifest entry, extracts the binary, smoke-tests it (`<new> version` must report a sharedwatch banner), then atomic-renames it over the running binary. Cowardly refuses to install if the binary's parent directory isn't writable by the current user (no `sudo` escalation).

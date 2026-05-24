@@ -96,6 +96,7 @@ func main() {
 		"overview": true,
 		"intent":   true,
 		"lease":    true,
+		"roots":    true,
 	}
 	if !known[rest[0]] {
 		fmt.Fprintln(os.Stderr, "unknown subcommand:", rest[0])
@@ -208,6 +209,8 @@ func main() {
 		handleIntent(ctx, a, rest[1:])
 	case "lease":
 		handleLease(ctx, a, rest[1:])
+	case "roots":
+		handleRoots(ctx, a, rest[1:])
 	default:
 		fmt.Fprintln(os.Stderr, "unknown subcommand:", rest[0])
 		usage(root)
@@ -1282,6 +1285,7 @@ COMMANDS
   init                      create the data dir + DB; print resolved paths
   run                       start watcher + consumer + reconcile loop
   status [--json]           print current state (mode, queue depth, last runs)
+  roots [--json]            list the folders being watched (works for single + multi-root)
   mode active [--ttl 30m]   enable active (fast-cadence) mode with TTL
   mode passive              force passive mode
   consume                   process pending events once and create a digest
@@ -1290,17 +1294,29 @@ COMMANDS
   digest archive <id>       mark a digest archived
   reconcile now             run reconcile pass immediately
   events list [flags]       read-only event query (--since, --type, --path-glob, --format, ...)
+  events stats --root <l>   per-root aggregates (counts by type, top actors)
   events cursor list|reset <name>|set <name>|encode|decode   manage iteration cursors
   events retry [--max-retries N]    requeue failed events back to pending
   events recover-stuck [--older-than 5m]   flip stuck processing events back to pending
+  overview [--format json]  cross-root L1 summary with drill hints
   sql <sql>|-|--file path   run a SQL query (SELECT-only by default; --write to allow mutations)
   schema [<table>]          print live DDL from the DB (--format text|json)
+  actor heartbeat <id>      register/heartbeat an actor in the actors registry
+  intent declare <path>     declare cooperative intent on a path (--ttl, --actor, --intent)
+  lease acquire <path-glob> acquire an advisory lease on a path glob (--ttl, --actor)
   test emit [relpath]       inject a synthetic event for end-to-end testing
                             (--payload <json> OR attribution flags below)
   update [--apply]          check for / install a newer release (safe: dry-run by default;
                             --apply downloads + SHA-256 verifies + atomic-swaps the binary)
   version                   print version and exit
   help                      print this help
+
+DEFAULT PATHS (when --watch-path / --db / --data-dir are not set)
+  watch_path = $XDG_DATA_HOME/sharedwatch/watch  (or ~/.local/share/sharedwatch/watch)
+  db_path    = $XDG_DATA_HOME/sharedwatch/queue.db
+  data_dir   = $XDG_DATA_HOME/sharedwatch
+  config     = ./config.yaml (silently ignored if missing)
+  Run 'sharedwatch init' once to materialise these and print the resolved paths.
 
 ATTRIBUTION FLAGS (root or test-emit; populate events.payload_json v1)
   --actor <id>              stable id of the writer (required to use any other)
@@ -1316,9 +1332,40 @@ GLOBAL FLAGS`)
 	root.PrintDefaults()
 	fmt.Fprintln(os.Stderr, `
 EXAMPLES
-  sharedwatch --watch-path ./scratch --db ./queue.db run
-  sharedwatch --config ./config.yaml status --json
-  sharedwatch test emit hello.md && sharedwatch consume && sharedwatch digest list`)
+
+  # First-time setup: materialise default paths under $XDG_DATA_HOME.
+  sharedwatch init
+  sharedwatch run &
+
+  # See what you're watching (single or multi-root).
+  sharedwatch roots
+  sharedwatch roots --json
+
+  # Multi-root: define folders with labels, then filter by label.
+  sharedwatch --root auth=/work/auth --root billing=/work/billing run &
+  sharedwatch --root auth events list --since 1h --format jsonl
+
+  # Stamp attribution on every event this invocation emits.
+  sharedwatch --actor claude-coord --task refactor-auth \
+              --intent "split monolithic login.go" run
+
+  # "What's new since I last looked?" — server-side cursor.
+  sharedwatch events list --cursor-name my-agent --format jsonl
+
+  # Schema discovery (run once per agent session, cache the result).
+  sharedwatch schema --format json
+
+  # SQL escape hatch — SELECT-only by default; --write to allow mutations.
+  sharedwatch sql "SELECT type, COUNT(*) FROM events GROUP BY type"
+
+  # End-to-end smoke: inject an attributed event, consume, view digest.
+  sharedwatch test emit hello.md --actor demo --task quick-smoke
+  sharedwatch consume
+  sharedwatch digest list
+
+  # Keep the binary current. Dry run by default; --apply to install.
+  sharedwatch update
+  sharedwatch update --apply`)
 }
 
 func fatal(err error) {
