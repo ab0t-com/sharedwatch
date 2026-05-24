@@ -2,11 +2,15 @@
 # (per-language details live alongside the Go module in src/)
 
 # --- Build & release artifacts ---
+# dist/ is the staging directory for scripts/release.sh — ephemeral.
+# release/ is committed to the repo and served via raw.githubusercontent.com
+# (see scripts/install.sh). Each release lives under release/vX.Y.Z/.
 dist/
 src/.bin/
 src/.ci-bin/
 .ci-bin/
 *.tar.gz
+!release/**/*.tar.gz
 *.tar.zst
 *.zip
 

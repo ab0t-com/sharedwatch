@@ -113,7 +113,7 @@ install_from_source() {
 }
 
 install_from_release() {
-  log "public mode: installing from github.com/$REPO releases"
+  log "public mode: installing from github.com/$REPO release/ (raw.githubusercontent.com)"
   have curl   || die "curl is required"
   have tar    || die "tar is required"
   have sha256sum || have shasum || die "sha256sum (or shasum) is required"
@@ -121,16 +121,21 @@ install_from_release() {
   local platform; platform="$(detect_platform)"
   log "platform: $platform"
 
-  # Resolve version
+  # The release artifacts are committed under release/vX.Y.Z/ in the repo
+  # and served via raw.githubusercontent.com. This sidesteps the GitHub
+  # Releases publish step entirely — anything on `main` is immediately
+  # installable. See GITOPS.md §10 for the policy.
+  local raw_base="https://raw.githubusercontent.com/$REPO/main"
+
+  # Resolve version. release/LATEST holds the version string (one line).
   if [ -z "$VERSION" ]; then
-    log "resolving latest release tag..."
-    VERSION="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-      | grep -E '"tag_name"' | head -1 | cut -d '"' -f4)"
-    [ -n "$VERSION" ] || die "could not resolve latest version; pass --version vX.Y.Z"
+    log "resolving latest version from release/LATEST..."
+    VERSION="$(curl -fsSL "$raw_base/release/LATEST" | tr -d '[:space:]')"
+    [ -n "$VERSION" ] || die "could not read $raw_base/release/LATEST; pass --version vX.Y.Z"
   fi
   log "version: $VERSION"
 
-  local base="https://github.com/$REPO/releases/download/$VERSION"
+  local base="$raw_base/release/$VERSION"
   local tarball="sharedwatch_${VERSION#v}_${platform}.tar.gz"
   local manifest="manifest.yaml"
 

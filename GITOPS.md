@@ -117,21 +117,30 @@ One rule worth repeating here: cutting a release means **one commit gets both** 
 
 ## 10. Releases
 
-Cutting a release is a script + manual-tag dance:
+**Releases live in the repo itself**, under `release/vX.Y.Z/`, and are served to installers via `raw.githubusercontent.com`. We do not use GitHub Releases (the publish-button workflow) and we do not use `gh` CLI. Anything on `main` is immediately installable; cutting a "release" means committing the artifacts.
 
 ```bash
-./scripts/release.sh --version vX.Y.Z       # cross-compile, write dist/manifest.yaml
-# review dist/
-git tag -a vX.Y.Z <release-commit> -m "vX.Y.Z — <one-line summary>"
-git branch vX.Y.Z <release-commit>
-git push origin refs/heads/main
-git push origin refs/heads/vX.Y.Z
-git push origin refs/tags/vX.Y.Z
-gh release create vX.Y.Z dist/*.tar.gz dist/manifest.yaml \
-  --title "vX.Y.Z" --notes-file src/CHANGELOG.md     # if gh installed
+# 1. Build cross-platform artifacts + manifest into dist/ (ephemeral staging).
+./scripts/release.sh --version vX.Y.Z
+
+# 2. Move the artifacts into the in-repo release/ directory.
+mkdir -p release/vX.Y.Z
+mv dist/sharedwatch_*.tar.gz dist/manifest.yaml release/vX.Y.Z/
+echo "vX.Y.Z" > release/LATEST          # the version installers pick by default
+
+# 3. Tag + branch + commit + push (per §3, §4, §6).
+git add release/vX.Y.Z release/LATEST
+git commit -m "release: vX.Y.Z artifacts"
+git tag -a vX.Y.Z HEAD -m "vX.Y.Z — <one-line summary>"
+git branch vX.Y.Z HEAD
+git push origin refs/heads/main refs/heads/vX.Y.Z refs/tags/vX.Y.Z
 ```
 
-The release manifest (`dist/manifest.yaml`) is consumed by both `scripts/install.sh` (for fresh installs) and the in-binary `sharedwatch update --apply` (for upgrades). Both verify SHA-256 from the manifest. **Do not edit a published manifest** — cut a new release if a correction is needed.
+That's the whole release. No web UI, no `gh`, no separate publish step.
+
+Why in-repo: removes the publish step entirely, keeps the install one-liner working off `main` automatically, and makes `release/manifest.yaml` reviewable in normal PRs. Trade-off: the repo grows by ~16 MB per release, and clones get slower forever. Acceptable for a small Go binary; would not be acceptable for larger artifacts. If the repo ever grows past ~500 MB total, revisit and migrate to GitHub Releases.
+
+The per-version `release/vX.Y.Z/manifest.yaml` is consumed by `scripts/install.sh` (for fresh installs) and the in-binary `sharedwatch update --apply` (for upgrades). Both verify SHA-256 from the manifest. **Do not edit a published manifest** — cut a new release if a correction is needed.
 
 ## 11. Repo settings (GitHub UI)
 
