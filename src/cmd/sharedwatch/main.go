@@ -227,6 +227,24 @@ func main() {
 		return
 	}
 
+	// SW-AGENT-26 (F37-E): intercept --help / -h BEFORE app.NewWithLogger,
+	// because the constructor creates the data dir + DB as a side-effect.
+	// Without this guard, `sharedwatch init --help` (and any other
+	// subcommand probed with --help) would silently materialise a queue.db
+	// under $XDG_DATA_HOME — a real safety footgun for agents that probe
+	// for help against an uninitialised host.
+	//
+	// We print the global usage rather than the per-subcommand flagset
+	// help. Some per-subcommand help is forfeited as a tradeoff for not
+	// running app.New on a help-probe, but the global usage already lists
+	// every subcommand's signature so the loss is small.
+	for _, a := range rest[1:] {
+		if a == "-h" || a == "--help" {
+			usage(root)
+			return
+		}
+	}
+
 	logger, err := buildLogger(*logFormat, *logLevel)
 	if err != nil {
 		fatal(err)

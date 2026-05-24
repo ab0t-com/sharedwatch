@@ -4,6 +4,21 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+## SW-AGENT-26 — `<subcmd> --help` safety (v0.0.10 candidate, bundled with SW-AGENT-25)
+
+Surfaced by parallel dogfood (scenarios 37-40 against v0.0.9) — Finding F37-E.
+
+### Fixed
+- **F37-E**: `sharedwatch <subcmd> --help` no longer silently materialises a queue.db. Previously `app.NewWithLogger` (which creates the data dir + DB) ran unconditionally during dispatch, so `init --help`, `consume --help`, `events list --help`, etc. all left state under `$XDG_DATA_HOME` even when the user was just probing for help. The background dogfood agent caught this when its `init --help` probe accidentally created files under `$HOME/.local/share/sharedwatch/`.
+- Fix is a 9-line early-return in the dispatcher: before `app.NewWithLogger` runs, scan `rest[1:]` for `-h` / `--help` and bail to global usage if found. No state is touched.
+- Tradeoff: per-subcommand flagset help (the verbose flag-list output you'd see from `events list --help` via `flag.PrintDefaults`) is replaced with the global `usage(root)` output for every `--help` invocation. The global usage already documents every subcommand's signature and key flags, so the loss is small. The safety win — never silently creating state on a help-probe — is the right call.
+
+### Deferred (from dogfood scenarios 37-40)
+Three HIGH-severity findings remain open from the background dogfood pass; see the scenario report for details. None blocks v0.0.10:
+- **F39-A**: `test emit` in multi-root mode always lands in the FIRST declared root, regardless of relpath or user intent. Needs a `--root <label>` flag on `test emit` (currently rejected at subcommand level — F39-B). Recommended ticket: **SW-AGENT-27 — multi-root test emit routing**.
+- **F40-C**: `events list` cursor with a changed filter scope silently skips events that didn't match the prior filter. Docs (Skill gotchas) claim a warning is emitted; the binary doesn't actually warn. Either implement the warning (requires storing prior filter scope per cursor) or fix the docs. Recommended ticket: **SW-AGENT-28 — cursor filter-change detection** (design discussion needed — schema change vs doc-only fix).
+- **F37-B**: `digest list --format json` errors "flag provided but not defined: -format". `digest list` is the one list-like subcommand still without JSON output. Recommended for the next output-parity sweep.
+
 ## SW-AGENT-25 — output surface normalisation (v0.0.10 candidate)
 
 Bundles the three highest-impact F36 findings from scenario 36 dogfood. Closes the cross-cutting output-flag inconsistencies that surfaced as `events stats --json` errored, `status --actors --json` silently dropped the actors array, and `config show --json` was the lone Go-CapitalCase + nanosecond-duration outlier.
