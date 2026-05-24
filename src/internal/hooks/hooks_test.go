@@ -145,9 +145,10 @@ func TestRunHookStderrCaptured(t *testing.T) {
 	}
 }
 
-// TestRunHookParentCtxCancel — when the parent ctx is cancelled, the
-// subprocess is killed. The user-visible guarantee is that we don't
-// hang past the parent cancel.
+// TestRunHookParentCtxCancel — when the parent ctx is cancelled (e.g.
+// SIGTERM during shutdown), the subprocess is killed AND classified
+// as ReasonCancelled (distinct from ReasonTimeout). Audit A4 caught
+// the prior version mis-classifying this as ReasonNonzeroExit.
 func TestRunHookParentCtxCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -157,8 +158,11 @@ func TestRunHookParentCtxCancel(t *testing.T) {
 	start := time.Now()
 	res := RunHook(ctx, `{}`, "sleep 5", 10*time.Second)
 	elapsed := time.Since(start)
-	if res.Reason == ReasonSuccess {
-		t.Fatalf("expected non-success (ctx cancel killed child), got success")
+	if res.Reason != ReasonCancelled {
+		t.Fatalf("expected ReasonCancelled, got %s (exit=%d)", res.Reason, res.ExitCode)
+	}
+	if res.ExitCode != -1 {
+		t.Fatalf("expected ExitCode -1 on ctx cancel, got %d", res.ExitCode)
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("parent ctx cancel took too long: %v", elapsed)
@@ -361,6 +365,32 @@ func TestEmitMetaEventFailure(t *testing.T) {
 	_ = json.Unmarshal([]byte(em.events[0].PayloadJSON), &p)
 	if p.Reason != ReasonTimeout {
 		t.Fatalf("expected reason=timeout, got %s", p.Reason)
+	}
+}
+
+// TestEmitMetaEventCancelled — ReasonCancelled (parent ctx cancel
+// during shutdown) also maps to hook.failed. Distinct from timeout
+// in the payload's reason field. Audit A4 regression guard.
+func TestEmitMetaEventCancelled(t *testing.T) {
+	em := &fakeEmitter{}
+	res := Result{
+		Command:  "sleep 99",
+		Reason:   ReasonCancelled,
+		ExitCode: -1,
+		Duration: 50 * time.Millisecond,
+	}
+	d := digest.Digest{ID: "dig_c"}
+	_, err := EmitMetaEvent(context.Background(), em, res, d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if em.events[0].Type != events.TypeHookFailed {
+		t.Fatalf("expected hook.failed for cancelled, got %s", em.events[0].Type)
+	}
+	var p metaPayload
+	_ = json.Unmarshal([]byte(em.events[0].PayloadJSON), &p)
+	if p.Reason != ReasonCancelled {
+		t.Fatalf("expected reason=cancelled, got %s", p.Reason)
 	}
 }
 

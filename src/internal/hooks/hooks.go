@@ -50,6 +50,12 @@ const (
 	// ReasonTimeout means the hook subprocess was killed because it ran
 	// longer than the configured timeout. ExitCode will be -1.
 	ReasonTimeout Reason = "timeout"
+	// ReasonCancelled means the parent context was cancelled (typically a
+	// SIGTERM / SIGINT during shutdown) while the hook was running, and
+	// the subprocess was killed as a result. Distinct from ReasonTimeout
+	// — a cancel is operator-initiated, a timeout is policy-enforced.
+	// ExitCode will be -1.
+	ReasonCancelled Reason = "cancelled"
 	// ReasonNonzeroExit means the hook ran to completion but exited
 	// with a non-zero status. ExitCode carries the actual exit code.
 	ReasonNonzeroExit Reason = "nonzero_exit"
@@ -225,19 +231,30 @@ func runHookInner(ctx context.Context, payloadJSON, command string, timeout time
 		return res
 	}
 
-	// Timeout / ctx-cancel: the child was killed. errors.Is catches both
-	// the deadline and the parent-ctx cancel cases.
+	// Timeout vs parent-ctx-cancel: both kill the subprocess, but the
+	// cause differs (policy vs operator). Audit A4 caught the prior
+	// version classifying parent-cancel as ReasonNonzeroExit because
+	// only DeadlineExceeded was checked — Canceled fell through to the
+	// exit-error branch. Now we check both, mapping each to its own
+	// Reason so meta-events distinguish "timed out per --on-digest-timeout"
+	// from "killed by SIGTERM during shutdown".
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		res.ExitCode = -1
 		res.Reason = ReasonTimeout
 		return res
 	}
+	if errors.Is(runCtx.Err(), context.Canceled) {
+		res.ExitCode = -1
+		res.Reason = ReasonCancelled
+		return res
+	}
 
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		// Subprocess ran but exited non-zero (or was killed by signal).
-		// On signal kill, ExitCode is -1 — distinguish from ctx-cancel
-		// above by falling through to nonzero_exit here.
+		// Subprocess ran but exited non-zero. The signal-kill case is
+		// already handled above (ctx Timeout / Canceled); anything
+		// reaching here is a real non-zero exit (sh syntax error,
+		// `false`, `exit 42`, etc.).
 		res.ExitCode = exitErr.ExitCode()
 		res.Reason = ReasonNonzeroExit
 		return res
@@ -282,15 +299,15 @@ type metaPayload struct {
 // EmitMetaEvent writes the `hook.completed` / `hook.failed` meta-event
 // into the journal so hook activity is queryable through the existing
 // events surface. Type is `hook.completed` iff Reason == ReasonSuccess;
-// any other outcome (timeout, nonzero, spawn error, even empty) maps
-// to `hook.failed` — agents can branch on the type without parsing
-// the payload's Reason field.
+// every other non-empty outcome (timeout, cancelled, nonzero, spawn
+// error) maps to `hook.failed` — agents can branch on the type without
+// parsing the payload's Reason field.
 //
-// Empty-reason results (ReasonEmpty) are NOT emitted: nothing
-// happened, so the journal stays quiet. Phase 4's consumer call site
-// is expected to skip RunHook entirely when --on-digest is unset, so
-// in practice EmitMetaEvent never sees ReasonEmpty — the guard is
-// defensive.
+// ReasonEmpty is the ONE exception: it short-circuits with (id="", nil)
+// because nothing happened (no subprocess was spawned, no work to
+// report). Phase 4's consumer call site skips RunHook entirely when
+// --on-digest is unset, so in practice EmitMetaEvent never sees
+// ReasonEmpty — the guard is defensive.
 //
 // Returns the inserted event's ID, or an error if the JSON marshal
 // or the InsertEvent call failed. Callers typically log-and-continue
