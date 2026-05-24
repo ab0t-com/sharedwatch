@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>sharedwatch — calm, pull-based folder activity feed</title>
+  <title>sharedwatch — calm collaboration bus for a local shared folder</title>
   <meta name="description" content="A single Go binary that watches a local folder, captures every change into a SQLite-backed queue, and serves it back on your own cadence. MIT-licensed.">
   <link rel="canonical" href="https://github.com/ab0t/sharedwatch">
   <style>
@@ -12,8 +12,14 @@
       --muted: #555;
       --accent: #1f6feb;
       --bg: #fafafa;
-      --code-bg: #f0f0f0;
-      --border: #e5e5e5;
+      --code-bg: #f3f3f3;
+      --term-bg: #0d1117;
+      --term-fg: #e6edf3;
+      --term-prompt: #7ee787;
+      --term-comment: #8b949e;
+      --border: #e2e2e2;
+      --warn-bg: #fff8e1;
+      --warn-border: #f4cf4f;
     }
     @media (prefers-color-scheme: dark) {
       :root {
@@ -23,95 +29,492 @@
         --bg: #0d1117;
         --code-bg: #161b22;
         --border: #30363d;
+        --warn-bg: #2d2415;
+        --warn-border: #8a6b1c;
       }
     }
     * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
     body {
-      font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       color: var(--fg);
       background: var(--bg);
       margin: 0;
-      padding: 2rem 1rem;
+      padding: 0;
     }
-    main {
-      max-width: 720px;
-      margin: 0 auto;
-    }
-    h1 { font-size: 2.25rem; margin: 0 0 0.25rem; letter-spacing: -0.02em; }
-    .tagline { color: var(--muted); margin: 0 0 2rem; font-size: 1.1rem; }
-    h2 { font-size: 1.25rem; margin-top: 2.5rem; border-bottom: 1px solid var(--border); padding-bottom: 0.25rem; }
+    main { max-width: 860px; margin: 0 auto; padding: 2.5rem 1rem 4rem; }
+    h1 { font-size: 2.4rem; margin: 0 0 0.4rem; letter-spacing: -0.025em; }
+    .tagline { color: var(--muted); margin: 0 0 1.5rem; font-size: 1.15rem; }
+    h2 { font-size: 1.45rem; margin-top: 3rem; border-bottom: 1px solid var(--border); padding-bottom: 0.3rem; letter-spacing: -0.01em; }
+    h3 { font-size: 1.1rem; margin-top: 1.8rem; }
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    code, pre {
-      font: 0.92rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      background: var(--code-bg);
-      border-radius: 4px;
+    code, pre, .terminal {
+      font: 0.9rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     }
-    code { padding: 0.1rem 0.35rem; }
-    pre { padding: 0.9rem 1rem; overflow-x: auto; border: 1px solid var(--border); }
+    p code, li code, td code { background: var(--code-bg); border-radius: 4px; padding: 0.1rem 0.35rem; }
+    pre { background: var(--code-bg); border-radius: 6px; padding: 0.9rem 1rem; overflow-x: auto; border: 1px solid var(--border); }
     pre code { background: transparent; padding: 0; }
+    table { border-collapse: collapse; width: 100%; margin: 0.8rem 0; }
+    th, td { border-bottom: 1px solid var(--border); padding: 0.5rem 0.6rem; text-align: left; vertical-align: top; }
+    th { font-weight: 600; }
     .pill {
       display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px;
       background: var(--code-bg); color: var(--muted); font-size: 0.8rem;
-      border: 1px solid var(--border); margin-right: 0.4rem;
+      border: 1px solid var(--border); margin-right: 0.4rem; margin-bottom: 0.3rem;
     }
-    footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem; }
+    .terminal {
+      background: var(--term-bg); color: var(--term-fg); border-radius: 6px;
+      padding: 0.9rem 1rem; overflow-x: auto; border: 1px solid var(--border);
+      white-space: pre; margin: 0.6rem 0 1rem;
+    }
+    .terminal .prompt { color: var(--term-prompt); }
+    .terminal .comment { color: var(--term-comment); }
+    .terminal .out { color: var(--term-fg); }
+    .warn {
+      background: var(--warn-bg); border: 1px solid var(--warn-border);
+      padding: 0.7rem 1rem; border-radius: 6px; margin: 0.8rem 0;
+    }
+    details {
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 0.6rem 1rem; margin: 0.5rem 0; background: var(--bg);
+    }
+    details[open] { padding-bottom: 1rem; }
+    details summary {
+      cursor: pointer; font-weight: 600; padding: 0.2rem 0;
+      list-style: none; outline: none;
+    }
+    details summary::-webkit-details-marker { display: none; }
+    details summary::before {
+      content: "▸"; display: inline-block; width: 1.2em;
+      transition: transform 0.15s ease;
+    }
+    details[open] summary::before { transform: rotate(90deg); }
+    .toc { background: var(--code-bg); padding: 0.8rem 1.2rem; border-radius: 6px; border: 1px solid var(--border); margin: 1rem 0 1.5rem; }
+    .toc ul { margin: 0.3rem 0; padding-left: 1.3rem; }
+    .toc li { margin: 0.15rem 0; }
+    footer { margin-top: 4rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem; }
     ul { padding-left: 1.3rem; }
     li { margin: 0.25rem 0; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    @media (max-width: 640px) { .grid-2 { grid-template-columns: 1fr; } }
+    .annot { color: var(--muted); font-size: 0.88rem; margin-top: -0.3rem; margin-bottom: 1rem; }
   </style>
 </head>
 <body>
 <main>
   <h1>sharedwatch</h1>
-  <p class="tagline">Calm, durable, pull-based activity feed for a local shared folder.</p>
+  <p class="tagline">A calm collaboration bus for a local shared folder. <strong>Capture every change. Read on your own cadence.</strong></p>
   <p>
     <span class="pill">MIT</span>
     <span class="pill">Go 1.22+</span>
     <span class="pill">single binary</span>
     <span class="pill">SQLite-backed</span>
+    <span class="pill">no daemon-spawning sub-processes</span>
+    <span class="pill">no network until you ask</span>
   </p>
 
   <p>
-    A single Go binary that watches a folder on disk, captures every change into a SQLite-backed queue,
-    and lets you review the activity on your own cadence — every 5&ndash;10 minutes by default,
-    near-real-time on demand. The watcher never interrupts you; you pull a digest when you're ready.
+    <code>sharedwatch</code> watches a folder on disk and writes every change (create, modify, delete, rename) into a durable SQLite queue. You — or an AI agent — read back digests on your own schedule. The watcher never interrupts the reader; the reader never blocks the watcher. They communicate through one append-only journal.
   </p>
 
-  <h2>Install</h2>
+  <nav class="toc">
+    <strong>On this page</strong>
+    <ul>
+      <li><a href="#install">Install</a></li>
+      <li><a href="#what">What it is (and isn't)</a></li>
+      <li><a href="#quickstart">60-second quickstart</a></li>
+      <li><a href="#help">Full <code>--help</code> reference</a></li>
+      <li><a href="#usage">Usage examples by situation</a> — 9 expand-to-see-real-output scenarios</li>
+      <li><a href="#update">Keeping the binary current</a></li>
+      <li><a href="#architecture">How it works (architecture sketch)</a></li>
+      <li><a href="#links">Source, license, related docs</a></li>
+    </ul>
+  </nav>
+
+  <h2 id="install">Install</h2>
   <pre><code>curl -fsSL https://raw.githubusercontent.com/ab0t/sharedwatch/main/scripts/install.sh | bash</code></pre>
+  <p class="annot">The installer checks SHA-256 against the release manifest before writing. Local-dev mode is auto-detected when run inside a checkout (uses <code>scripts/rebuild.sh</code> instead of downloading).</p>
+
   <p>Or grab a tagged release tarball from the <a href="https://github.com/ab0t/sharedwatch/releases">releases page</a>.</p>
 
-  <h2>60-second quickstart</h2>
-  <pre><code>sharedwatch init
-sharedwatch run &amp;
-echo "hello" &gt; ~/.local/share/sharedwatch/watch/hello.md
-sharedwatch digest list</code></pre>
+  <h2 id="what">What it is (and isn't)</h2>
+  <div class="grid-2">
+    <div>
+      <h3>It is</h3>
+      <ul>
+        <li>A single static Go binary that runs on one host.</li>
+        <li>A polling filesystem watcher (deliberate; portable, predictable, no kernel-specific wiring).</li>
+        <li>A durable SQLite journal of every observed change, with optional content hashing.</li>
+        <li>A pull-based digest API for humans (<code>digest list</code> / <code>digest show</code>) and for agents (<code>events list</code> with cursors, <code>sql</code> escape hatch).</li>
+        <li>Multi-root: one daemon, many labelled folders, per-root coalesce + rename detection.</li>
+        <li>Multi-actor: <code>payload_json v1</code> with <code>actor / session / task / intent / addressee / ref_event_id / tags</code>; cooperative <code>intents</code> + advisory <code>leases</code>.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>It is not</h3>
+      <ul>
+        <li>Not a git replacement — it records that a file changed, not byte-level history. (See <a href="https://github.com/ab0t/sharedwatch/blob/main/docs/design/design-questions-20260523.md">design-questions Q1</a>.)</li>
+        <li>Not a multi-host file share or sync service.</li>
+        <li>Not push-based — readers pull on their own cadence (passive 10 min, active 5 s).</li>
+        <li>Not a high-throughput pipeline — low-to-moderate write volume is the design centre.</li>
+        <li>Not a daemon that talks to the network — until you opt into <code>update</code>, every operation stays on this machine.</li>
+      </ul>
+    </div>
+  </div>
 
-  <h2>What it's for</h2>
+  <h2 id="quickstart">60-second quickstart</h2>
+  <div class="terminal"><span class="prompt">$</span> sharedwatch init
+<span class="out">watch_path=/home/you/.local/share/sharedwatch/watch
+db_path=/home/you/.local/share/sharedwatch/queue.db
+data_dir=/home/you/.local/share/sharedwatch</span>
+
+<span class="prompt">$</span> sharedwatch run &amp;
+<span class="comment"># watcher + consumer + reconcile loop now running in the background</span>
+
+<span class="prompt">$</span> echo "hello" &gt; ~/.local/share/sharedwatch/watch/hello.md
+
+<span class="prompt">$</span> sharedwatch digest list
+<span class="out">dgs_1779580871393427045 2026-05-24T00:01:11Z events=1 status=pending Shared drive digest at 2026-05-24T00:01:11Z</span>
+
+<span class="prompt">$</span> sharedwatch digest show dgs_1779580871393427045
+<span class="comment"># prints the full digest and marks it read</span></div>
+
+  <h2 id="help">Full <code>--help</code> reference</h2>
+  <p class="annot">Verbatim output of <code>sharedwatch help</code> (v0.0.2 build).</p>
+  <div class="terminal"><span class="out">sharedwatch — calm collaboration bus for a local shared folder
+
+USAGE
+  sharedwatch [global flags] &lt;command&gt; [command flags] [args]
+
+COMMANDS
+  init                      create the data dir + DB; print resolved paths
+  run                       start watcher + consumer + reconcile loop
+  status [--json]           print current state (mode, queue depth, last runs)
+  mode active [--ttl 30m]   enable active (fast-cadence) mode with TTL
+  mode passive              force passive mode
+  consume                   process pending events once and create a digest
+  digest list [--limit N]   list recent digests (newest first)
+  digest show &lt;id&gt;          print one digest in full (marks it read)
+  digest archive &lt;id&gt;       mark a digest archived
+  reconcile now             run reconcile pass immediately
+  events list [flags]       read-only event query (--since, --type, --path-glob, --format, ...)
+  events cursor list|reset &lt;name&gt;|set &lt;name&gt;|encode|decode   manage iteration cursors
+  events retry [--max-retries N]    requeue failed events back to pending
+  events recover-stuck [--older-than 5m]   flip stuck processing events back to pending
+  sql &lt;sql&gt;|-|--file path   run a SQL query (SELECT-only by default; --write to allow mutations)
+  schema [&lt;table&gt;]          print live DDL from the DB (--format text|json)
+  test emit [relpath]       inject a synthetic event for end-to-end testing
+                            (--payload &lt;json&gt; OR attribution flags below)
+  update [--apply]          check for / install a newer release (safe: dry-run by default;
+                            --apply downloads + SHA-256 verifies + atomic-swaps the binary)
+  version                   print version and exit
+  help                      print this help
+
+ATTRIBUTION FLAGS (root or test-emit; populate events.payload_json v1)
+  --actor &lt;id&gt;              stable id of the writer (required to use any other)
+  --actor-kind &lt;k&gt;          human | ai_agent | automation
+  --session &lt;id&gt;            logical-run identifier; group related events
+  --task &lt;label&gt;            short human-meaningful work label
+  --intent &lt;text&gt;           one-sentence reason
+  --addressee &lt;id&gt;          who the change is FOR (peer or human)
+  --ref &lt;event-id&gt;          causal predecessor event id (ref_event_id)
+  --tag &lt;t&gt;                 payload tag (repeatable, comma-aware)</span></div>
+
+  <h2 id="usage">Usage examples by situation</h2>
+  <p class="annot">Each accordion below covers one real situation. Click to expand. Outputs shown are real terminal captures, lightly trimmed for width.</p>
+
+  <details>
+    <summary>1. Watch a single folder; read digests on your own cadence (the canonical flow)</summary>
+    <p><strong>Situation:</strong> you have one folder you want a calm ambient awareness of. You'll check in every 10–15 minutes.</p>
+    <div class="terminal"><span class="prompt">$</span> sharedwatch --watch-path ./shared --db ./shared.db init
+<span class="out">watch_path=./shared
+db_path=./shared.db
+data_dir=./shared/.sharedwatch</span>
+
+<span class="prompt">$</span> sharedwatch --watch-path ./shared --db ./shared.db run &amp;
+<span class="comment"># watcher polls every coalesce window; consumer runs every 10 min (passive)
+# or every 5 s (active). Reconcile pass every 30 min as the safety net.</span>
+
+<span class="prompt">$</span> <span class="comment"># ... time passes ...</span>
+
+<span class="prompt">$</span> sharedwatch --db ./shared.db status
+<span class="out">mode=passive pending=12 failed=0 digests=3 unread_digests=2 archived_digests=0 \
+       active_until=- active_expires_in=- last_event=2026-05-24T00:01:02Z \
+       last_consumer=2026-05-23T23:50:00Z last_reconcile=2026-05-23T23:30:00Z</span>
+
+<span class="prompt">$</span> sharedwatch --db ./shared.db digest list
+<span class="out">dgs_177958...  2026-05-24T00:01:11Z events=12 status=pending Shared drive digest
+dgs_177957...  2026-05-23T23:50:00Z events=8  status=read    Shared drive digest
+dgs_177956...  2026-05-23T23:40:00Z events=3  status=read    Shared drive digest</span></div>
+  </details>
+
+  <details>
+    <summary>2. Multi-root: one daemon, many labelled folders</summary>
+    <p><strong>Situation:</strong> you're tracking three projects in three different folders, want a single queue, but need per-root scoping.</p>
+    <div class="terminal"><span class="prompt">$</span> sharedwatch \
+    --root auth=/workspace/projects/auth \
+    --root billing=/workspace/projects/billing \
+    --root frontend=/workspace/projects/frontend \
+    --db ./shared.db run &amp;
+
+<span class="prompt">$</span> <span class="comment"># Per-root status, as JSON:</span>
+<span class="prompt">$</span> sharedwatch --db ./shared.db status --json | jq '.roots'
+<span class="out">[
+  { "label": "auth",     "path": "/workspace/projects/auth",
+    "pending": 3, "last_event_at": "2026-05-24T00:01:02Z", "ok": true },
+  { "label": "billing",  "path": "/workspace/projects/billing",
+    "pending": 9, "last_event_at": "2026-05-23T23:59:14Z", "ok": true },
+  { "label": "frontend", "path": "/workspace/projects/frontend",
+    "pending": 0, "last_event_at": null, "ok": true }
+]</span>
+
+<span class="prompt">$</span> <span class="comment"># Filter events for one root only (note: --root used as filter here, not definition):</span>
+<span class="prompt">$</span> sharedwatch --db ./shared.db events list --root auth --since 1h --format jsonl
+<span class="out">{"id":"evt_...", "type":"file.modified", "rel_path":"login.go",   "watch_root":"auth", ...}
+{"id":"evt_...", "type":"file.created",  "rel_path":"login_test.go","watch_root":"auth", ...}</span></div>
+    <div class="warn"><strong>Invariants:</strong> coalesce and rename detection are root-scoped. Two <code>README.md</code> files in different roots never merge. Filter-mode <code>--root &lt;label&gt;</code> uses bare label (no <code>=path</code>); definition-mode requires <code>--root &lt;label&gt;=&lt;path&gt;</code>.</div>
+  </details>
+
+  <details>
+    <summary>3. Attribute every event to an actor (humans, AI agents, automation)</summary>
+    <p><strong>Situation:</strong> multiple writers share the same folder. You want to know who did what.</p>
+    <p>The <code>payload_json v1</code> schema carries <code>actor / session / task / intent / addressee / ref_event_id / tags</code>. Attribution flags can be set on the <em>root</em> flagset (apply to every event the invocation emits) or on <code>test emit</code> (per-event).</p>
+    <div class="terminal"><span class="prompt">$</span> <span class="comment"># Stamp every event from this daemon lifetime:</span>
+<span class="prompt">$</span> sharedwatch \
+    --actor claude-coordinator-1 --actor-kind ai_agent \
+    --session sess-2026-05-24-abc \
+    --task refactor-auth \
+    --intent "split monolithic login.go into login/, signup/, logout/" \
+    run
+
+<span class="prompt">$</span> <span class="comment"># Emit one attributed synthetic event:</span>
+<span class="prompt">$</span> sharedwatch test emit specs/widget.md \
+    --actor claude-spec --actor-kind ai_agent \
+    --task new-widget-spec \
+    --addressee claude-code \
+    --tag spec --tag widget
+
+<span class="out">emitted evt_79b64ece7905adcd specs/widget.md</span>
+
+<span class="prompt">$</span> sharedwatch events list --limit 1 --format jsonl
+<span class="out">{
+  "id": "evt_79b64ece7905adcd",
+  "type": "file.modified",
+  "rel_path": "specs/widget.md",
+  "created_at": "2026-05-24T00:01:02.712Z",
+  "producer_id": "ip-172-31-22-90:92088",
+  "payload_json": "{\"schema_version\":1,\"actor\":\"claude-spec\",\"actor_kind\":\"ai_agent\",
+                    \"task\":\"new-widget-spec\",\"addressee\":\"claude-code\",
+                    \"tags\":[\"spec\",\"widget\"]}"
+}</span></div>
+  </details>
+
+  <details>
+    <summary>4. "What's new since I last looked?" — server-side cursors</summary>
+    <p><strong>Situation:</strong> your agent runs every few minutes and wants to consume only events it hasn't seen.</p>
+    <div class="terminal"><span class="prompt">$</span> <span class="comment"># First call. Cursor "my-agent" doesn't exist yet, so this returns
+# everything from oldest to newest (ASC over (created_at, id)) and
+# advances the cursor to the last returned row.</span>
+<span class="prompt">$</span> sharedwatch events list --cursor-name my-agent --limit 100 --format jsonl
+<span class="out">{"id":"evt_a","type":"file.created", ...}
+{"id":"evt_b","type":"file.modified",...}
+...
+{"id":"evt_z","type":"file.modified",...}</span>
+
+<span class="prompt">$</span> <span class="comment"># Next call. Returns only events newer than where my-agent left off.</span>
+<span class="prompt">$</span> sharedwatch events list --cursor-name my-agent --format jsonl
+<span class="out">{"id":"evt_aa","type":"file.modified",...}
+{"id":"evt_ab","type":"file.deleted", ...}</span>
+
+<span class="prompt">$</span> <span class="comment"># Peek without advancing:</span>
+<span class="prompt">$</span> sharedwatch events list --cursor-name my-agent --no-advance --format jsonl
+
+<span class="prompt">$</span> <span class="comment"># Reset if you want to re-process from the beginning:</span>
+<span class="prompt">$</span> sharedwatch events cursor reset my-agent</div>
+  </details>
+
+  <details>
+    <summary>5. Self-discovery: schema, status, multi-root</summary>
+    <p><strong>Situation:</strong> your agent doesn't know the schema yet. Run these <em>once</em> per session and cache.</p>
+    <div class="terminal"><span class="prompt">$</span> sharedwatch schema --format json | jq 'keys'
+<span class="out">[
+  "actors",
+  "cursors",
+  "digests",
+  "events",
+  "intents",
+  "leases",
+  "runtime_state",
+  "snapshots"
+]</span>
+
+<span class="prompt">$</span> sharedwatch status --json
+<span class="out">{
+  "format_version": 1,
+  "mode": "passive",
+  "pending": 0,
+  "failed": 0,
+  "digests": 0,
+  "unread_digests": 0,
+  "archived_digests": 0,
+  "last_event_at": "2026-05-24T00:01:02.717Z"
+}</span></div>
+  </details>
+
+  <details>
+    <summary>6. Progressive disclosure: overview → stats → list</summary>
+    <p><strong>Situation:</strong> you want an L1 overview before drilling. Each endpoint returns a <code>drill</code> map of pre-computed follow-up commands.</p>
+    <div class="terminal"><span class="prompt">$</span> sharedwatch overview --format json
+<span class="out">{
+  "format_version": 1,
+  "generated_at": "2026-05-24T00:01:18Z",
+  "since": "24h0m0s",
+  "mode": "passive",
+  "pending": 0,
+  "failed": 0,
+  "events_in_range": 1,
+  "by_type":    [{"type":"file.modified", "count":1}],
+  "top_actors": [{"actor":"demo-agent",   "count":1}],
+  "drill": {
+    "actor:demo-agent": "sharedwatch events list --payload-key actor --payload-value demo-agent --since 1h --format jsonl",
+    "events_by_type":   "sharedwatch sql \"SELECT type, COUNT(*) FROM events GROUP BY type\"",
+    "events_failed":    "sharedwatch events list --status failed --format jsonl",
+    "events_recent":    "sharedwatch events list --since 1h --format jsonl"
+  }
+}</span></div>
+    <p>Then narrow with <code>events stats --root &lt;label&gt;</code> (L2, per-root), and finally <code>events list</code> (L4) for the raw rows.</p>
+  </details>
+
+  <details>
+    <summary>7. SQL escape hatch (read-only by default)</summary>
+    <p><strong>Situation:</strong> the projected columns aren't quite right; you want raw SQL.</p>
+    <div class="terminal"><span class="prompt">$</span> sharedwatch sql "SELECT type, COUNT(*) AS n FROM events GROUP BY type ORDER BY n DESC" --format json
+<span class="out">[
+  {"type":"file.modified","n":42},
+  {"type":"file.created", "n":11},
+  {"type":"file.deleted", "n": 3}
+]</span>
+
+<span class="prompt">$</span> <span class="comment"># Anything not SELECT/WITH/EXPLAIN/PRAGMA table_info is refused unless --write:</span>
+<span class="prompt">$</span> sharedwatch sql "UPDATE events SET status='processed' WHERE id='evt_x'"
+<span class="out">error: refusing to run a write statement without --write (tripwire, not a security boundary)</span></div>
+    <div class="warn"><strong>This is a tripwire, not a security boundary.</strong> The DB file is right there on disk; <code>--write</code> exists for cases where you genuinely need to mutate.</div>
+  </details>
+
+  <details>
+    <summary>8. Multi-agent handoff (cooperative coordination)</summary>
+    <p><strong>Situation:</strong> agent A writes a spec; agent B reads the spec and writes code; agent A wants to know it's been picked up.</p>
+    <div class="terminal"><span class="prompt">$</span> <span class="comment"># A registers + heartbeats so B can see them in `status --actors`:</span>
+<span class="prompt">$</span> sharedwatch actor heartbeat claude-spec --kind ai_agent --focus 'specs/**'
+
+<span class="prompt">$</span> <span class="comment"># A declares an intent (cooperative — peers SHOULD respect it):</span>
+<span class="prompt">$</span> sharedwatch intent declare 'specs/widget.md' \
+    --actor claude-spec --ttl 5m --intent "drafting widget spec"
+
+<span class="prompt">$</span> <span class="comment"># A writes the spec. The change auto-attributes to claude-spec
+# because the root attribution flags were set:</span>
+<span class="prompt">$</span> echo "..." &gt; specs/widget.md
+
+<span class="prompt">$</span> <span class="comment"># B looks for things addressed to them:</span>
+<span class="prompt">$</span> sharedwatch events list \
+    --payload-key addressee --payload-value claude-code \
+    --format jsonl
+
+<span class="prompt">$</span> <span class="comment"># B emits a response, ref'ing A's event id (causal chain):</span>
+<span class="prompt">$</span> sharedwatch test emit src/widget.go \
+    --actor claude-code --task implement-widget \
+    --ref evt_79b64ece7905adcd --addressee claude-spec</div>
+  </details>
+
+  <details>
+    <summary>9. Operational hygiene: retry, recover-stuck, reconcile</summary>
+    <p><strong>Situation:</strong> something went wrong during consume; events are stuck.</p>
+    <div class="terminal"><span class="prompt">$</span> <span class="comment"># Re-queue events that failed:</span>
+<span class="prompt">$</span> sharedwatch events retry --max-retries 3
+
+<span class="prompt">$</span> <span class="comment"># Recover events stuck in 'processing' state for &gt;5 min
+# (typically from a crashed consumer):</span>
+<span class="prompt">$</span> sharedwatch events recover-stuck --older-than 5m
+
+<span class="prompt">$</span> <span class="comment"># Force an immediate reconcile pass — re-diffs the folder against
+# the last snapshot and enqueues recovery events for anything missed:</span>
+<span class="prompt">$</span> sharedwatch reconcile now</div>
+  </details>
+
+  <h2 id="update">Keeping the binary current</h2>
+  <p><strong>The <code>update</code> command is safe by default.</strong> Running it bare prints what <em>would</em> change and exits. Pass <code>--apply</code> to actually install.</p>
+
+  <div class="terminal"><span class="prompt">$</span> sharedwatch update
+<span class="out">current version:  v0.0.2
+target version:   v0.0.3
+repo:             ab0t/sharedwatch
+platform:         linux_amd64
+binary path:      /home/you/.local/bin/sharedwatch
+download:         https://github.com/ab0t/sharedwatch/releases/download/v0.0.3/sharedwatch_0.0.3_linux_amd64.tar.gz
+manifest:         https://github.com/ab0t/sharedwatch/releases/download/v0.0.3/manifest.yaml
+
+DRY RUN — no changes made. To apply: sharedwatch update --apply</span>
+
+<span class="prompt">$</span> sharedwatch update --apply
+<span class="out">current version:  v0.0.2
+target version:   v0.0.3
+...
+Replace /home/you/.local/bin/sharedwatch with v0.0.3 ? [y/N] y
+downloading manifest...
+downloading tarball (~few MB)...
+verifying SHA-256...
+  expected: 5e2c...d0b
+  actual:   5e2c...d0b OK
+extracting binary...
+smoke-testing new binary...
+
+installed v0.0.3 to /home/you/.local/bin/sharedwatch
+if a daemon is running, restart it to pick up the new binary</span></div>
+
+  <h3>What "safe" means here</h3>
   <ul>
-    <li>A single host where a human (or assistant agent) wants ambient awareness of a folder without being interrupted.</li>
-    <li>Low-to-moderate write volume, restart-safe operation with a durable on-disk queue.</li>
-    <li>Multi-folder watching with stable labels (<code>--root auth=/path</code>, <code>--root billing=/path</code>).</li>
-    <li>Progressive disclosure: overview &rarr; stats &rarr; full event list, so consumers fetch only what they need.</li>
+    <li><strong>Dry-run by default.</strong> Bare <code>sharedwatch update</code> reads metadata and prints a plan. No download, no write.</li>
+    <li><strong>SHA-256 verification.</strong> The tarball's hash must match the entry in the release's <code>manifest.yaml</code> before extraction. Mismatch aborts cleanly.</li>
+    <li><strong>Smoke test before swap.</strong> The downloaded binary must execute and report a sharedwatch version banner before it's installed. A broken binary never replaces a working one.</li>
+    <li><strong>Atomic install.</strong> <code>rename(2)</code> on the binary path. Either you have the old binary or the new one — never a half-written file.</li>
+    <li><strong>No sudo escalation.</strong> Refuses if the binary's parent directory isn't writable by the current user.</li>
+    <li><strong>Safe to run while the daemon is active.</strong> On POSIX, the running process holds the old inode. The new binary takes effect on next restart.</li>
+    <li><strong>Touches nothing but the binary.</strong> No DB write, no config change, no watched-folder write.</li>
+    <li><strong>Bounded network time.</strong> <code>--timeout 60s</code> by default.</li>
+    <li><strong>Pin a specific version.</strong> <code>--version v0.0.2</code> overrides "latest". Useful for rollback.</li>
   </ul>
 
-  <h2>What it's not</h2>
-  <ul>
-    <li>Not a git replacement &mdash; this records that a file changed, not byte-level content history.</li>
-    <li>Not a multi-host file share or sync service.</li>
-    <li>Not push-based &mdash; consumers pull on their own cadence.</li>
-  </ul>
+  <h2 id="architecture">How it works (architecture sketch)</h2>
+  <pre><code>filesystem ──▶ watcher (polling diff, per-root)
+                  └▶ coalesce (rel_path + actor + watch_root)
+                        └▶ SQLite events table (pending)
+                              │
+                              ▼ pull
+                        consumer (passive 10m | active 5s)
+                              └▶ digests table
+                                    │
+                                    ▼ pull
+                              you / your agent
 
-  <h2>Links</h2>
+separately, every reconcile_interval (default 30m):
+   snapshot ──▶ diff vs last reconcile snapshot ──▶ recovery events
+</code></pre>
+  <p>Three independent moving parts, all writing through one SQLite DB with WAL mode + foreign-key cascade. Single-process, single-host. The polling-not-fsnotify choice is a deliberate v1 simplification — predictable across kernels, no platform-specific wiring.</p>
+
+  <h2 id="links">Source, license, related docs</h2>
   <ul>
     <li><a href="https://github.com/ab0t/sharedwatch">Source on GitHub</a></li>
-    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/README.md">README</a></li>
+    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/README.md">Top-level README (orientation)</a></li>
+    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/src/README.md">Program README (full)</a></li>
     <li><a href="https://github.com/ab0t/sharedwatch/blob/main/src/CHANGELOG.md">Changelog</a></li>
+    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/src/CONTRIBUTING.md">Contributing + versioning policy</a></li>
+    <li><a href="https://github.com/ab0t/sharedwatch/blob/main/docs/README.md">docs/ manifest (design, reports, specs, agent docs, dogfood)</a></li>
     <li><a href="https://github.com/ab0t/sharedwatch/blob/main/LICENSE">License (MIT)</a></li>
   </ul>
 
   <footer>
-    &copy; 2026 ab0t.com &mdash; MIT licensed. This page is the project landing page; see the repo for source.
+    &copy; 2026 ab0t.com &mdash; MIT licensed. Outputs shown on this page are real captures from a development build of <code>sharedwatch</code>; numbers will vary in your environment.
   </footer>
 </main>
 </body>

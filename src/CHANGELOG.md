@@ -4,6 +4,13 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — `update` subcommand (safe self-updater)
+- `sharedwatch update` prints the current version, the latest release tag fetched from GitHub, the target download URL and binary path, then exits. No changes by default.
+- `sharedwatch update --apply` downloads the platform tarball + `manifest.yaml` from the release, verifies the tarball's SHA-256 against the manifest entry, extracts the binary, smoke-tests it (`<new> version` must report a sharedwatch banner), then atomic-renames it over the running binary. Cowardly refuses to install if the binary's parent directory isn't writable by the current user (no `sudo` escalation).
+- `--version vX.Y.Z` pins a target tag; `--repo owner/repo` overrides the default `ab0t/sharedwatch`; `--yes` skips the interactive confirmation; `--timeout 60s` bounds network operations.
+- Safe to run while a daemon is active: atomic rename(2) on Linux/macOS leaves the running process's inode untouched. The new binary takes effect when the daemon is next restarted.
+- Lives in `cmd/sharedwatch/update.go`; uses only stdlib (`net/http`, `crypto/sha256`, `archive/tar`, `compress/gzip`). No new module deps.
+
 ### Added — watcher-side lease advisory warning (SW-AGENT-12, S7.9)
 - When an event lands on a path covered by an active lease whose actor differs from the event's actor, the watcher (and reconciler) log a structured `slog.Warn` line including `event_id`, `rel_path`, `watch_root`, `event_actor`, `lease_id`, `lease_actor`, `lease_path_glob`, `lease_expires_at`. Advisory only — does not block the write. Cooperative peers see the warning in logs and can decide to back off.
 - New `db.LeaseGlobMatchesPath(glob, path)` helper supports `*` (any non-slash run) and `**` (any depth), matching the EventFilter path-glob semantics. Covered by `TestLeaseGlobMatchesPath` (11 cases).

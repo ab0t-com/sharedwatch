@@ -39,11 +39,17 @@ sharedwatch status --json
 
 # 2. The journal — your most common query.
 #    The CLI exposes the timestamp column as `created_at`. (Internally
-#    the DB has both `created_at` and `observed_at`; `events list`
-#    surfaces the server-insert time as `created_at`.)
+#    the DB has both `created_at` and `observed_at` columns; in normal
+#    operation both carry the watcher's observation time, set on insert.
+#    `events list` projects the `observed_at` value under the label
+#    `created_at`. For direct SQL, both columns are addressable.)
 sharedwatch events list --since 1h \
   --fields id,type,rel_path,producer_id,created_at \
   --format jsonl
+
+# Keep the binary current (safe: dry-run by default).
+sharedwatch update             # check; prints what would change
+sharedwatch update --apply     # download + SHA-256 verify + atomic-swap binary
 
 # 3. "What's new since I last looked?" — idempotent across calls
 sharedwatch events list --cursor-name <your-actor-id> \

@@ -59,7 +59,7 @@ sharedwatch events list --cursor-name <actor>-<task> --root <label> --format jso
 
 # 5. Self-discovery (once per session, cache)
 sharedwatch schema --format json
-sharedwatch roots --format json
+sharedwatch status --json | jq '.roots'   # list watch roots and per-root state
 ```
 
 Plus the new actor/intent/lease commands:

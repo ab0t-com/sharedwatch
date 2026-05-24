@@ -101,17 +101,18 @@ Default `--fields` for multi-root scope: `id, type, rel_path, watch_root, produc
 
 ## 7. Status and roots discovery
 
+There is no standalone `roots` subcommand. Multi-root state is surfaced through `status`:
+
 ```bash
-# Compact list
-sharedwatch roots
-# auth     /workspace/projects/auth     pending=3   last=2026-05-22T14:32:11Z
-# billing  /workspace/projects/billing  pending=9   last=2026-05-22T14:18:44Z
+# Human-readable: text-mode status includes roots when multi-root is configured.
+sharedwatch status
+# mode: passive  pending: 12
+# roots:
+#   auth     /workspace/projects/auth     pending=3   last=2026-05-22T14:32:11Z
+#   billing  /workspace/projects/billing  pending=9   last=2026-05-22T14:18:44Z
 
-# JSON for agents
-sharedwatch roots --format json
-
-# Equivalent via status
-sharedwatch status --json | jq .roots
+# Machine-readable: status --json carries a roots[] array.
+sharedwatch status --json | jq '.roots'
 ```
 
 `status --json` adds a `roots[]` array **only when multi-root is configured**:

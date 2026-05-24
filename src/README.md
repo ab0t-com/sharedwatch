@@ -75,6 +75,8 @@ sharedwatch [global flags] <command> [command flags] [args]
   reconcile now             run reconcile pass immediately
   test emit [relpath]       inject a synthetic event for end-to-end testing
                             (--payload <json> OR attribution flags below)
+  update [--apply]          check for / install a newer release (safe: dry-run by default;
+                            --apply downloads + SHA-256 verifies + atomic-swaps the binary)
   version                   print version and exit
   help                      print this help
 ```
