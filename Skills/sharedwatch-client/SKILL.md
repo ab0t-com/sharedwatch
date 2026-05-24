@@ -117,11 +117,34 @@ sharedwatch config show
 #    (or `null` when empty), not an envelope object.
 #
 # 8. `test emit` for an already-emitted (actor,path) pair within the
-#    5s coalesce window returns a NEW evt_id but the underlying row
-#    is merged into the prior event. Do not record that id and try
-#    to reference it later — `events list` will not surface it. If
-#    you need to know whether your emit landed as a fresh row, query
-#    by path+actor right after.
+#    5s coalesce window: as of v0.0.9 the CLI prints `coalesced into
+#    <prior_id> <relpath>` instead of advertising a fresh id. The
+#    prior id is the persisted row; record THAT one. (Older binaries
+#    on v0.0.8 and earlier printed a phantom new id.)
+#
+# 9. JSON-flag inconsistency across subcommands. Three patterns exist:
+#    -  `--json` (bool): status, intent list, lease list, config show, roots
+#    -  `--format json|jsonl` (string): events list, events stats, schema, overview
+#    -  Both forms can co-exist (intent list has --json, events list has --format)
+#    Don't assume one form works everywhere. When in doubt, check
+#    `<cmd> --help`. The repeatable axis between agent-style scripts is
+#    `SHAREDWATCH_FORMAT=jsonl` at session start — that hits both paths.
+#
+# 10. `status --actors` text output appends actors to the end (after
+#    the Next: hints block). In --json mode the --actors flag is
+#    SILENTLY IGNORED — no actors array is added. To enumerate
+#    registered actors as JSON, you need a different surface
+#    (currently: query the actors table via `sharedwatch sql`).
+#
+# 11. `events stats` requires `--root <label>` (single watch_root scope).
+#    For across-roots counts use `sharedwatch overview` instead. The
+#    binary's error message points you to overview, so you'll find
+#    it quickly — but `stats` is the wrong default mental model.
+#
+# 12. `config show --json` field names are Go CapitalCase
+#    (`WatchPath`, `DBPath`, `CoalesceWindow`) and durations are raw
+#    nanoseconds (5000000000 = 5s). Every OTHER JSON endpoint uses
+#    snake_case + duration strings. Special-case config show.
 
 # 3. "What's new since I last looked?" — idempotent across calls
 sharedwatch events list --cursor-name <your-actor-id> \

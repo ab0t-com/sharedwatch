@@ -1446,3 +1446,54 @@ $SW events list --since 5m --type file.modified --fields id,rel_path --format js
 
 **Findings:** **All 8 sub-cases pass.** Filter matrix is solid. No action.
 
+---
+
+## Scenario 36 — post-v0.0.9 regression check + output-flag inconsistency probe — v0.0.9
+
+**Why:** (a) confirm SW-AGENT-23's Q2/Q3 fixes hold in the deployed install (not just the dev binary); (b) probe a new axis — the `--json` vs `--format json` flag inconsistency that's been quietly accumulating across subcommands as they were added at different times.
+
+```bash
+SW=$HOME/.local/bin/sharedwatch
+$SW update --version v0.0.9 --apply --yes
+$SW --version   # expect: sharedwatch v0.0.9
+
+DOG=/tmp/dog-v009-validate; rm -rf $DOG && mkdir -p $DOG/watch
+export XDG_DATA_HOME=$DOG XDG_CONFIG_HOME=$DOG
+$SW init --watch $DOG/watch >/dev/null
+
+# (a) Q2 regression check — coalesce-aware emit
+$SW test emit src/auth.go --actor alpha   # expect: emitted evt_X
+$SW test emit src/auth.go --actor alpha   # expect: coalesced into evt_X (same id)
+$SW test emit src/auth.go --actor beta    # expect: emitted evt_Y (distinct)
+
+# (b) Q3 regression check — JSONL on intent + lease list
+$SW intent declare "a/**" --actor alpha --intent x
+$SW intent declare "b/**" --actor beta  --intent y
+$SW intent list --json                    # expect: one object per line, no envelope
+$SW lease grant "x/**" --actor alpha --ttl 1m
+$SW lease list --json                     # expect: one object per line
+
+# (c) Output-flag inconsistency probe
+$SW events stats --json                   # expect: ERROR (uses --format json, not --json)
+$SW events stats --format json --root .   # expect: works
+$SW status --actors --json                # expect: works BUT no "actors" key in output
+$SW status --actors --json | jq 'has("actors")'   # expect: false
+$SW config show --json | jq '.effective | keys[0:3]'   # expect: CapitalCase keys
+```
+
+**What this exercises:** v0.0.9 install integrity, SW-AGENT-23 Q2/Q3 fixes in production binary, the cross-cutting JSON-flag inconsistency, the silent `--actors --json` ignore.
+
+**Pass criteria:** (a) Q2 fix works (coalesced-into prints prior id); (b) Q3 JSONL works for both intent + lease; (c) probes surface the documented inconsistencies (not regressions — these are pre-existing surface quirks now being documented).
+
+**Findings:**
+- ✅ SW-AGENT-23 Q2 holds in v0.0.9: `coalesced into evt_bf601...` printed correctly.
+- ✅ SW-AGENT-23 Q3 holds: both intent and lease list --json emit JSONL.
+- ✅ Help-text fixes hold: `intent declare --help` shows positional, `intent revoke --help` shows usage.
+- F36-A: `config show --json` uses Go CapitalCase keys + nanosecond durations (all other JSON endpoints use snake_case). Documented as gotcha.
+- F36-B: `events stats` requires `--root <label>`. Error message points to `overview` — good DX. Documented for agent surface.
+- F36-C: `--json` vs `--format json` inconsistency: some commands accept the bool, others require the string. Most-impactful gotcha — agents will hit this. Documented.
+- F36-D: `status --actors --json` silently ignores `--actors` flag (only affects text output). Real bug — flag should add `actors[]` to JSON OR error. Documented; deferred (small fix, not enough to cut a release).
+- F36-E: `status --actors` text output appends actors line at the very bottom, AFTER the "Next:" hint block (layout). Minor.
+
+**Net:** v0.0.9 deployment confirmed good; SW-AGENT-23 closed cleanly. 5 cross-cutting output-flag findings documented as gotchas — no fixes in-round (deferred until they accumulate into a real release-worthy ticket, e.g. SW-AGENT-25 — output-flag normalisation).
+

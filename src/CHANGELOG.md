@@ -4,6 +4,16 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Dogfooded — v0.0.9 install regression check + output-flag inconsistency probe (scenario 36)
+- Scenario 36 added to `docs/dogfood/test_dogfood.md`. Run end-to-end against the deployed v0.0.9 binary. SW-AGENT-23 Q2/Q3 fixes confirmed to hold in the production install (coalesced-into prints the prior id; intent + lease list emit JSONL).
+- 5 cross-cutting output-flag findings surfaced + documented as gotchas (no code fixes in-round — defer until they accumulate into a real ticket):
+  - **F36-A**: `config show --json` uses Go CapitalCase keys + nanosecond durations (every other JSON endpoint uses snake_case).
+  - **F36-B**: `events stats` requires `--root <label>`. Error message points to `overview` for across-roots counts — good DX, just non-default mental model.
+  - **F36-C**: `--json` vs `--format json` inconsistency: some commands accept a bool, others require a string. Most impactful agent surface gotcha — `SHAREDWATCH_FORMAT=jsonl` at session start sidesteps both.
+  - **F36-D**: `status --actors --json` silently ignores `--actors` (only affects text mode). Real bug — flag should add `actors[]` to JSON or error.
+  - **F36-E**: `status --actors` text output appends actors line AFTER the Next hints block (layout).
+- Recommended ticket for v0.0.10: **SW-AGENT-25 — output surface normalisation** (bundle F36-A/C/D fixes; smallest viable scope, no design risk).
+
 ## [v0.0.9] — 2026-05-24 — SW-AGENT-23: intent surface parity
 
 ### Fixed
