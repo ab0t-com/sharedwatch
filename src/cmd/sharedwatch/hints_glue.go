@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"sharedwatch/internal/app"
+	"sharedwatch/internal/config"
 	"sharedwatch/internal/hints"
 )
 
@@ -11,6 +12,11 @@ import (
 // duration of this invocation. main() sets it from the flag value during
 // parsing; handlers read it via resolveHintsProfile().
 var hintsProfileFlag string
+
+// configSearch records what the config-file search step actually did
+// for this invocation. main() populates it during config load; handlers
+// that need to render it (e.g. `config show`) read it directly.
+var configSearch config.SearchResult
 
 // resolveHintsProfile picks the effective profile for the current
 // invocation: --hints flag > SHAREDWATCH_HINTS env > json-output promotion

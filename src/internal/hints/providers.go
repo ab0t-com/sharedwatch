@@ -15,6 +15,17 @@ func init() {
 	Register("init", providerInit)
 	Register("version", providerVersion)
 	Register("overview", providerOverview)
+	Register("stop", providerStop)
+}
+
+// providerStop suggests restarting the daemon after a successful stop.
+// Always emits the same single hint — no state required.
+func providerStop(_ Context) []Hint {
+	return []Hint{{
+		Name:    "restart_daemon",
+		Command: "sharedwatch run",
+		Reason:  "restart the watcher + consumer + reconcile loop",
+	}}
 }
 
 // providerStatus suggests the most likely next action based on queue

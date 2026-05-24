@@ -269,6 +269,19 @@ func TestHintSet_JSONOmitEmpty(t *testing.T) {
 	}
 }
 
+func TestProvider_Stop_Suggests_Run(t *testing.T) {
+	hs := For("stop", Context{Profile: ProfileDefault})
+	if len(hs.Hints) != 1 {
+		t.Fatalf("want 1 hint after stop, got %d: %+v", len(hs.Hints), hs.Hints)
+	}
+	if hs.Hints[0].Name != "restart_daemon" {
+		t.Errorf("want name=restart_daemon, got %q", hs.Hints[0].Name)
+	}
+	if !strings.Contains(hs.Hints[0].Command, "run") {
+		t.Errorf("want command containing 'run', got %q", hs.Hints[0].Command)
+	}
+}
+
 func TestRegisterClear_Roundtrip(t *testing.T) {
 	// Registering a custom provider, then clearing, then re-checking
 	// should remove the custom provider but the test cannot leave the

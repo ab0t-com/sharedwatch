@@ -4,6 +4,34 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — env-var resolution layer for agent identity + output defaults (SW-AGENT-18 §3)
+- New resolution chain: `flag > env > config.yaml > built-in default`. Env vars layer between config and flag.
+- Canonical `SHAREDWATCH_*` env vars: `SHAREDWATCH_ACTOR`, `_ACTOR_KIND`, `_SESSION`, `_TASK`, `_ADDRESSEE` (attribution fields); `SHAREDWATCH_FORMAT`, `_ROOT`, `_CURSOR_NAME` (per-command defaults); `SHAREDWATCH_HINTS` (existing).
+- An AI agent can now `export SHAREDWATCH_ACTOR=claude-coord-1 SHAREDWATCH_FORMAT=jsonl SHAREDWATCH_HINTS=agent` once at session start and stop typing those flags on every command.
+
+### Added — XDG-aware config file search (SW-AGENT-18 §2)
+- `Load()` now searches: `--config <path>` (when set), then `./config.yaml`, then `$XDG_CONFIG_HOME/sharedwatch/config.yaml` (or `~/.config/sharedwatch/config.yaml`). First existing wins. All optional.
+- Pre-existing project-local `./config.yaml` behaviour preserved as the higher-precedence layer above XDG, so no regression for current users.
+
+### Added — `sharedwatch config show` introspection
+- New subcommand: prints the effective resolved Config, every `SHAREDWATCH_*` env var detected this invocation, the config files searched (and which one loaded), and the resolution-order legend.
+- Text mode (default) is human-friendly with column alignment; `--json` emits a `format_version: 1` envelope for agent consumption.
+- Closes the "is my SHAREDWATCH_X being read?" debug loop.
+
+### Added — `sharedwatch stop` subcommand
+- Reads PID from `<data_dir>/sharedwatch.lock`, sends SIGTERM, polls for lock-file removal with `--timeout` (default 10s).
+- `--force` escalates to SIGKILL after timeout.
+- Exits 0 on clean stop (or no lock file); 1 if daemon won't die in time without `--force`.
+- Wired through the hints engine: a successful stop emits a `restart_daemon` hint suggesting `sharedwatch run`.
+
+### Changed — config parser now reads 10+ keys that were silently ignored
+- The following YAML keys were defined on `Config` but never parsed by `Load()`: `include_patterns`, `hash_enabled`, `hash_max_size`, `producer_id`. They now round-trip correctly.
+- New keys for agent defaults: `actor`, `actor_kind`, `session`, `task`, `addressee`, `default_format`, `default_root`, `default_since`, `hints`, `cursor_name`. All optional.
+
+### Added — design documents: hooks discussion + defaults audit
+- [`docs/design/hooks-discussion-20260524.md`](../docs/design/hooks-discussion-20260524.md): does sharedwatch need a hooks system? Verdict — build `--on-digest <cmd>` only, when a real user asks. Don't build speculatively.
+- [`docs/design/defaults-audit-20260524.md`](../docs/design/defaults-audit-20260524.md): audit of every CLI flag against "does the agent have to repeat this every time?". Drove this release.
+
 ### Changed — `events list --since` defaults to 24h when no cursor is set
 - Bare `sharedwatch events list` previously returned the entire journal from the dawn of time. Now defaults `--since` to `24h` when neither `--since`, `--since-cursor`, nor `--cursor-name` is set. Matches `overview --since 24h` and `events stats --since 24h`.
 - Override: pass `--since <RFC3339>` or a duration like `--since 1h` for any window; pass `--since 0` for the legacy "no lower bound" behaviour (returns everything).

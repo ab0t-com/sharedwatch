@@ -44,6 +44,22 @@ type Config struct {
 	// --actor / --session / --task / --intent / --addressee / --ref / --tag is
 	// set on the root flagset.
 	PayloadJSON string
+
+	// Agent-default fields (SW-AGENT-18). Populated from `config.yaml` and/or
+	// SHAREDWATCH_* env vars. The CLI's attrFlags struct overlays these at
+	// invocation time so the resolution chain is:
+	//     flag > env > config (these fields) > built-in default.
+	// All optional; empty = no default applied.
+	Actor         string
+	ActorKind     string
+	Session       string
+	Task          string
+	Addressee     string
+	DefaultFormat string // honoured by every `--format` flag when set
+	DefaultRoot   string // honoured by `--root` filter on read commands
+	DefaultSince  string // honoured by `events list --since` when no cursor
+	Hints         string // honoured by `--hints`; aligns with SHAREDWATCH_HINTS
+	CursorName    string // honoured by `events list --cursor-name`
 }
 
 // defaultDataHome resolves the XDG_DATA_HOME spec: $XDG_DATA_HOME if set,

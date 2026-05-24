@@ -39,7 +39,7 @@ func main() {
 
 	root := flag.NewFlagSet("sharedwatch", flag.ContinueOnError)
 	root.SetOutput(os.Stderr)
-	configPath := root.String("config", "config.yaml", "path to config file (silently ignored if missing)")
+	configPath := root.String("config", "", "explicit config file path; if empty, search ./config.yaml then $XDG_CONFIG_HOME/sharedwatch/config.yaml (silently ignored if missing)")
 	var watchPaths csvList
 	root.Var(&watchPaths, "watch-path", "override watch_path; repeatable (comma-aware) for multi-root setups")
 	var rootDefs rootDefList
@@ -90,6 +90,11 @@ func main() {
 	case "update":
 		handleUpdate(ctx, rest[1:])
 		return
+	case "config":
+		// `sharedwatch config show` — the only `config` subcommand for now.
+		// Routed in the early switch because it doesn't need the DB; cfg
+		// resolution happens just below before we dispatch.
+		// Fall through to load config, then handle below.
 	}
 
 	known := map[string]bool{
@@ -100,6 +105,8 @@ func main() {
 		"intent":   true,
 		"lease":    true,
 		"roots":    true,
+		"config":   true,
+		"stop":     true,
 	}
 	if !known[rest[0]] {
 		fmt.Fprintln(os.Stderr, "unknown subcommand:", rest[0])
@@ -108,11 +115,18 @@ func main() {
 	}
 
 	cfg := config.Default()
-	if loaded, err := config.Load(*configPath, cfg); err != nil {
-		fatal(fmt.Errorf("load config %s: %w", *configPath, err))
-	} else {
-		cfg = loaded
+	configSearch = config.SearchConfig(*configPath)
+	if configSearch.LoadedPath != "" {
+		if loaded, err := config.Load(configSearch.LoadedPath, cfg); err != nil {
+			fatal(fmt.Errorf("load config %s: %w", configSearch.LoadedPath, err))
+		} else {
+			cfg = loaded
+		}
 	}
+	// Env vars overlay onto config (SW-AGENT-18 §3). Flag overlay happens
+	// downstream — see mergeAttrFlags for attribution and individual
+	// handlers' flagDefault() calls for per-command flag defaults.
+	cfg = applyEnvToConfig(cfg)
 	if len(watchPaths) > 0 || len(rootDefs) > 0 {
 		// Build WatchRoots from --watch-path entries (unlabeled, auto-labeled
 		// later) plus --root <label>=<path> entries (explicit-labeled).
@@ -163,8 +177,28 @@ func main() {
 	if *producerOverride != "" {
 		cfg.ProducerID = *producerOverride
 	}
-	if !rootAttr.isEmpty() {
-		cfg.PayloadJSON = events.BuildPayloadV1(rootAttr.toPayload())
+	// Merge flag > env (already in cfg) > config to get the final
+	// attribution payload for this invocation.
+	finalAttr := mergeAttrFlags(rootAttr, cfg)
+	if !finalAttr.isEmpty() {
+		cfg.PayloadJSON = events.BuildPayloadV1(finalAttr.toPayload())
+	}
+
+	// Subcommands that don't need an app instance. `config show` reads
+	// resolved cfg + search trail; `stop` reads the lock file under
+	// cfg.DBPath's dir. Both route here AFTER cfg resolution but BEFORE
+	// the DB-backed App is opened, so they work even when no daemon has
+	// been initialised yet.
+	switch rest[0] {
+	case "config":
+		if len(rest) < 2 || rest[1] != "show" {
+			fatal(fmt.Errorf("usage: sharedwatch config show [--json]"))
+		}
+		handleConfigShow(ctx, cfg, configSearch, rest[2:])
+		return
+	case "stop":
+		handleStop(ctx, cfg, rest[1:])
+		return
 	}
 
 	logger, err := buildLogger(*logFormat, *logLevel)
@@ -518,7 +552,7 @@ func handleEventsStats(ctx context.Context, a *app.App, args []string) {
 	fs := flag.NewFlagSet("events stats", flag.ExitOnError)
 	root := fs.String("root", "", "REQUIRED — single watch_root label to scope the aggregation")
 	since := fs.Duration("since", 24*time.Hour, "lookback window (default 24h)")
-	formatFlag := fs.String("format", "text", "text|json")
+	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
 	_ = fs.Parse(args)
 	if *root == "" {
 		fmt.Fprintln(os.Stderr, "events stats requires --root <label>. For across-roots counts, use `sharedwatch overview`.")
@@ -606,10 +640,10 @@ func handleEventsList(ctx context.Context, a *app.App, args []string) {
 	pathGlob := fs.String("path-glob", "", "filter rel_path by glob (supports `**`)")
 	limit := fs.Int("limit", 100, "max rows (0 = no cap)")
 	order := fs.String("order", "desc", "asc|desc by created_at")
-	formatFlag := fs.String("format", "text", "text|json|jsonl|csv")
+	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json|jsonl|csv (env SHAREDWATCH_FORMAT)")
 	fields := fs.String("fields", "", "comma-separated column projection (default: all)")
 	sinceCursor := fs.String("since-cursor", "", "opaque cursor token; mutually exclusive with --since")
-	cursorName := fs.String("cursor-name", "", "named server-side cursor")
+	cursorName := fs.String("cursor-name", a.Cfg.CursorName, "named server-side cursor (env SHAREDWATCH_CURSOR_NAME)")
 	noAdvance := fs.Bool("no-advance", false, "with --cursor-name, do not write the new position back")
 	var types, sources, statuses, producers, watchRoots csvList
 	fs.Var(&types, "type", "filter by type (repeatable)")
@@ -817,7 +851,7 @@ func handleSQL(ctx context.Context, a *app.App, args []string) {
 
 	fs := flag.NewFlagSet("sql", flag.ExitOnError)
 	file := fs.String("file", "", "read SQL from a file")
-	formatFlag := fs.String("format", "text", "text|json|jsonl|csv")
+	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json|jsonl|csv (env SHAREDWATCH_FORMAT)")
 	allowWrite := fs.Bool("write", false, "allow non-SELECT statements (default: read-only)")
 	explain := fs.Bool("explain", false, "print EXPLAIN QUERY PLAN before executing")
 	_ = fs.Parse(cleaned)
@@ -1078,7 +1112,7 @@ func newRandID(prefix string) string {
 func handleOverview(ctx context.Context, a *app.App, args []string) {
 	fs := flag.NewFlagSet("overview", flag.ExitOnError)
 	since := fs.Duration("since", 24*time.Hour, "lookback window for the aggregations (default 24h)")
-	formatFlag := fs.String("format", "text", "text|json")
+	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
 	_ = fs.Parse(args)
 
 	ov, err := a.ComputeOverview(ctx, *since)
@@ -1174,7 +1208,7 @@ func handleActorHeartbeat(ctx context.Context, a *app.App, args []string) {
 
 func handleSchema(ctx context.Context, a *app.App, args []string) {
 	fs := flag.NewFlagSet("schema", flag.ExitOnError)
-	formatFlag := fs.String("format", "text", "text|json")
+	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
 	_ = fs.Parse(args)
 	tables, err := a.Store.Schema(ctx)
 	if err != nil {
@@ -1363,6 +1397,9 @@ COMMANDS
                             (--payload <json> OR attribution flags below)
   update [--apply]          check for / install a newer release (safe: dry-run by default;
                             --apply downloads + SHA-256 verifies + atomic-swaps the binary)
+  config show [--json]      print effective config + env vars + searched config files
+  stop [--timeout 10s]      send SIGTERM to the running daemon (PID from lock file);
+                            --force escalates to SIGKILL after --timeout
   version                   print version and exit
   help                      print this help
 
@@ -1370,8 +1407,20 @@ DEFAULT PATHS (when --watch-path / --db / --data-dir are not set)
   watch_path = $XDG_DATA_HOME/sharedwatch/watch  (or ~/.local/share/sharedwatch/watch)
   db_path    = $XDG_DATA_HOME/sharedwatch/queue.db
   data_dir   = $XDG_DATA_HOME/sharedwatch
-  config     = ./config.yaml (silently ignored if missing)
+  config     = ./config.yaml THEN $XDG_CONFIG_HOME/sharedwatch/config.yaml
+               (both optional; first found wins; --config <path> overrides search)
   Run 'sharedwatch init' once to materialise these and print the resolved paths.
+
+ENV VARS (set once at session start; flag > env > config > built-in)
+  SHAREDWATCH_ACTOR          stable id of the writer (payload_json.actor)
+  SHAREDWATCH_ACTOR_KIND     human | ai_agent | automation
+  SHAREDWATCH_SESSION        logical-run id (sess-YYYY-MM-DD-<short>)
+  SHAREDWATCH_TASK           short human-meaningful work label
+  SHAREDWATCH_ADDRESSEE      who the change is FOR
+  SHAREDWATCH_FORMAT         default --format (text|json|jsonl|csv)
+  SHAREDWATCH_ROOT           default --root filter
+  SHAREDWATCH_CURSOR_NAME    default --cursor-name on events list
+  SHAREDWATCH_HINTS          default --hints profile
 
 ATTRIBUTION FLAGS (root or test-emit; populate events.payload_json v1)
   --actor <id>              stable id of the writer (required to use any other)

@@ -78,9 +78,31 @@ sharedwatch [global flags] <command> [command flags] [args]
                             (--payload <json> OR attribution flags below)
   update [--apply]          check for / install a newer release (safe: dry-run by default;
                             --apply downloads + SHA-256 verifies + atomic-swaps the binary)
+  config show [--json]      print effective config + env vars + searched config files
+  stop [--timeout 10s]      send SIGTERM to the running daemon (--force to SIGKILL)
   version                   print version and exit
   help                      print this help
 ```
+
+## Environment variables
+
+Set these once at session start (e.g. in your shell rc) so the agent doesn't repeat them on every command. **Resolution order: `flag > env > config.yaml > built-in default`**.
+
+| Var | Maps to | Notes |
+|---|---|---|
+| `SHAREDWATCH_ACTOR` | `--actor` / `payload_json.actor` | Stable writer id. The single biggest UX win for AI agents. |
+| `SHAREDWATCH_ACTOR_KIND` | `--actor-kind` | `human` / `ai_agent` / `automation` |
+| `SHAREDWATCH_SESSION` | `--session` | Per-shell session id, e.g. `sess-2026-05-24-abc` |
+| `SHAREDWATCH_TASK` | `--task` | Short work label |
+| `SHAREDWATCH_ADDRESSEE` | `--addressee` | Who the change is FOR (rare) |
+| `SHAREDWATCH_FORMAT` | `--format` default | `text` / `json` / `jsonl` / `csv` |
+| `SHAREDWATCH_ROOT` | `--root` filter default | For agents scoped to one root |
+| `SHAREDWATCH_CURSOR_NAME` | `--cursor-name` default | Activates cursor mode without typing the flag |
+| `SHAREDWATCH_HINTS` | `--hints` profile default | `default` / `agent` / `terse` / `off` |
+| `XDG_DATA_HOME` | data dir base | Defaults to `~/.local/share` |
+| `XDG_CONFIG_HOME` | config search root | Defaults to `~/.config` |
+
+Run `sharedwatch config show` any time to see which env vars and config files are actually being read.
 
 ## Global flags
 | Flag | Default | Notes |

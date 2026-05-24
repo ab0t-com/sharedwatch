@@ -4,7 +4,7 @@
 .\"
 .\" Source of truth for the program: src/cmd/sharedwatch/main.go
 .\" When commands or flags change, update this file in the same PR.
-.TH SHAREDWATCH 1 "2026-05-24" "v0.0.4" "User Commands"
+.TH SHAREDWATCH 1 "2026-05-24" "v0.0.5" "User Commands"
 .SH NAME
 sharedwatch \- calm, pull-based activity journal for a local shared folder
 .SH SYNOPSIS
@@ -115,6 +115,20 @@ another actor writes to the locked area.
 Inject a synthetic event for end-to-end testing. The \fB--payload\fR raw
 JSON form and the attribution flags (\fB--actor\fR \fIetc\fR) are mutually
 exclusive.
+.TP
+.B config show \fR[\fB--json\fR]
+Print the resolved effective config, every detected
+\fBSHAREDWATCH_*\fR env var, the config files searched (with which one
+loaded), and the resolution-order legend. Closes the
+"is my env var being read?" debug loop. \fB--json\fR emits a
+\fIformat_version: 1\fR envelope.
+.TP
+.B stop \fR[\fB--timeout\fR \fIduration\fR] [\fB--force\fR]
+Send SIGTERM to the running daemon. Reads PID from
+\fI<data_dir>/sharedwatch.lock\fR, sends the signal, polls for lock-file
+removal with \fB--timeout\fR (default 10s). With \fB--force\fR, escalates
+to SIGKILL after the timeout. Exits 0 on clean stop (or no lock file);
+1 if the daemon won't die in time without \fB--force\fR.
 .TP
 .B update \fR[\fB--apply\fR] [\fB--version\fR \fItag\fR] [\fB--repo\fR \fIowner/repo\fR] [\fB--yes\fR] [\fB--timeout\fR \fIduration\fR]
 Check for or install a newer release. Dry-run by default. With
@@ -283,8 +297,14 @@ File lock held by the active \fBrun\fR process to prevent concurrent
 daemons. PID of the holder is written to the file.
 .TP
 .I ./config.yaml
-Optional config file searched in the current working directory. Silently
-ignored if missing. Override with \fB--config\fR.
+Optional config file searched first in the current working directory.
+Silently ignored if missing.
+.TP
+.I $XDG_CONFIG_HOME/sharedwatch/config.yaml
+Optional config file searched second (after project-local). Defaults
+to \fI$HOME/.config/sharedwatch/config.yaml\fR. Silently ignored if
+missing. Project-local \fI./config.yaml\fR wins when both exist.
+Override the entire search with \fB--config <path>\fR.
 .SH ENVIRONMENT
 .TP
 .B XDG_DATA_HOME
@@ -295,6 +315,40 @@ Base directory for default \fIdata_dir\fR. Defaults to
 Default profile for next-step suggestions. One of \fIdefault\fR,
 \fIagent\fR, \fIterse\fR, \fIoff\fR. Overridden by the \fB--hints\fR
 flag. See \fB--hints\fR under GLOBAL FLAGS for resolution rules.
+.TP
+.B SHAREDWATCH_ACTOR
+Default value for \fB--actor\fR (payload_json.actor). The single
+biggest UX win for AI agents — export once at session start and skip
+the flag on every command.
+.TP
+.B SHAREDWATCH_ACTOR_KIND
+Default value for \fB--actor-kind\fR. One of \fIhuman\fR, \fIai_agent\fR,
+\fIautomation\fR.
+.TP
+.B SHAREDWATCH_SESSION
+Default value for \fB--session\fR (logical-run id).
+.TP
+.B SHAREDWATCH_TASK
+Default value for \fB--task\fR (short work label).
+.TP
+.B SHAREDWATCH_ADDRESSEE
+Default value for \fB--addressee\fR (who the change is FOR).
+.TP
+.B SHAREDWATCH_FORMAT
+Default value for \fB--format\fR on every command that takes one
+(\fItext\fR / \fIjson\fR / \fIjsonl\fR / \fIcsv\fR).
+.TP
+.B SHAREDWATCH_ROOT
+Default value for \fB--root\fR filter on read subcommands.
+.TP
+.B SHAREDWATCH_CURSOR_NAME
+Default value for \fB--cursor-name\fR on \fBevents list\fR. Set to
+activate cursor mode by default.
+.TP
+.B XDG_CONFIG_HOME
+Base directory for the second config-file search location:
+\fI$XDG_CONFIG_HOME/sharedwatch/config.yaml\fR. Defaults to
+\fI$HOME/.config\fR. See FILES for the full search order.
 .SH EXIT STATUS
 .TP
 .B 0

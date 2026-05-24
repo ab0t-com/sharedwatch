@@ -34,6 +34,22 @@ sharedwatch is built for the case where multiple writers — humans in editors, 
 
 **Loadable skills for agents.** Two skill packages under [`Skills/`](Skills/) are designed to be loaded into an AI agent's context: `sharedwatch-client` (operational reference) and `sharedwatch-client-future` (v0.8+ features). The agent system prompt at [`docs/agent/agent-system-prompt-20260522.md`](docs/agent/agent-system-prompt-20260522.md) is a ready-to-use template.
 
+**Agent startup ritual.** Set the `SHAREDWATCH_*` env vars once at session start and skip typing those flags on every command:
+
+```bash
+export SHAREDWATCH_ACTOR=claude-coord-1
+export SHAREDWATCH_ACTOR_KIND=ai_agent
+export SHAREDWATCH_SESSION="sess-$(date +%Y-%m-%d)-$(uuidgen | head -c8)"
+export SHAREDWATCH_FORMAT=jsonl
+export SHAREDWATCH_CURSOR_NAME=claude-coord-1
+export SHAREDWATCH_HINTS=agent
+
+# Verify what the binary will use:
+sharedwatch config show
+```
+
+`flag > env > config > built-in default`. Full env var table in [`src/README.md`](src/README.md#environment-variables).
+
 See [`src/README.md`](src/README.md) for the full CLI surface, [`docs/design/multi-agent-discussion-20260522.md`](docs/design/multi-agent-discussion-20260522.md) for the design rationale, and [`docs/dogfood/test_dogfood.md`](docs/dogfood/test_dogfood.md) for 18 runnable end-to-end scenarios including the canonical multi-agent handoff.
 
 ## Install

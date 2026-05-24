@@ -58,6 +58,20 @@ sharedwatch update --apply     # download + SHA-256 verify + atomic-swap binary
 # the flag is the way to opt in.
 sharedwatch --hints agent status --json | jq '.next'
 
+# AGENT STARTUP RITUAL (recommended). Export these once per shell
+# session and never type --actor / --format / --cursor-name / --hints
+# on individual commands again. Resolution: flag > env > config > default.
+export SHAREDWATCH_ACTOR=claude-coord-1            # your stable id
+export SHAREDWATCH_ACTOR_KIND=ai_agent
+export SHAREDWATCH_SESSION="sess-$(date +%Y-%m-%d)-$(uuidgen | head -c8)"
+export SHAREDWATCH_FORMAT=jsonl                    # agents want jsonl
+export SHAREDWATCH_CURSOR_NAME=claude-coord-1      # cursor mode on by default
+export SHAREDWATCH_HINTS=agent                     # rich next[] hints
+
+# Then verify what the binary will actually use:
+sharedwatch config show
+# (or `sharedwatch config show --json` for machine-readable)
+
 # 3. "What's new since I last looked?" — idempotent across calls
 sharedwatch events list --cursor-name <your-actor-id> \
   --limit 50 --format jsonl
