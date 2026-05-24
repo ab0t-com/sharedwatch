@@ -296,7 +296,15 @@ func handleStatus(ctx context.Context, a *app.App, args []string) {
 			if err != nil {
 				fatal(err)
 			}
-			snap.Actors = actors
+			// SW-AGENT-25 (F36-D): ensure non-nil pointer so the JSON key
+			// is emitted even when zero actors are registered. Empty
+			// `[]ActorView{}` via pointer-to-slice marshals as `"actors":[]`;
+			// nil pointer would still be omitted (matching default status
+			// shape when --actors isn't passed).
+			if actors == nil {
+				actors = []app.ActorView{}
+			}
+			snap.Actors = &actors
 		}
 		// Smart hints (SW-AGENT-17): suggest next steps based on state.
 		snap.Next = hints.For("status", hints.Context{
@@ -628,7 +636,9 @@ func handleEventsStats(ctx context.Context, a *app.App, args []string) {
 	root := fs.String("root", "", "REQUIRED — single watch_root label to scope the aggregation")
 	since := fs.Duration("since", 24*time.Hour, "lookback window (default 24h)")
 	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
+	asJSON := fs.Bool("json", false, "alias for --format json (SW-AGENT-25)")
 	_ = fs.Parse(args)
+	*formatFlag = resolveFormat(*formatFlag, *asJSON, "json")
 	// SW-AGENT-20 §S1.1: agent-readable error envelope when --format json|jsonl.
 	jsonErr := isJSONFormat(*formatFlag)
 	if *root == "" {
@@ -730,7 +740,10 @@ func handleEventsList(ctx context.Context, a *app.App, args []string) {
 	includeRoot := fs.Bool("include-watch-root", false, "always show the watch_root column in output (auto-shown when result spans multiple roots)")
 	payloadKey := fs.String("payload-key", "", "post-filter: payload_json[<key>] must equal --payload-value")
 	payloadValue := fs.String("payload-value", "", "see --payload-key")
+	asJSON := fs.Bool("json", false, "alias for --format jsonl — streaming JSON, one event per line (SW-AGENT-25)")
 	_ = fs.Parse(args)
+	// SW-AGENT-25: --json alias maps to jsonl on events list (streaming shape).
+	*formatFlag = resolveFormat(*formatFlag, *asJSON, "jsonl")
 	// SW-AGENT-19 §3.3: when --format is json/jsonl, errors emit as a
 	// JSON envelope on stdout instead of text on stderr — agents reading
 	// the JSON stream don't have to multiplex stderr.
@@ -934,7 +947,9 @@ func handleSQL(ctx context.Context, a *app.App, args []string) {
 	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json|jsonl|csv (env SHAREDWATCH_FORMAT)")
 	allowWrite := fs.Bool("write", false, "allow non-SELECT statements (default: read-only)")
 	explain := fs.Bool("explain", false, "print EXPLAIN QUERY PLAN before executing")
+	asJSON := fs.Bool("json", false, "alias for --format jsonl — streaming JSON, one row per line (SW-AGENT-25)")
 	_ = fs.Parse(cleaned)
+	*formatFlag = resolveFormat(*formatFlag, *asJSON, "jsonl")
 	jsonErr := isJSONFormat(*formatFlag)
 	positional := fs.Args()
 
@@ -1221,7 +1236,9 @@ func handleOverview(ctx context.Context, a *app.App, args []string) {
 	fs := flag.NewFlagSet("overview", flag.ExitOnError)
 	since := fs.Duration("since", 24*time.Hour, "lookback window for the aggregations (default 24h)")
 	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
+	asJSON := fs.Bool("json", false, "alias for --format json (SW-AGENT-25)")
 	_ = fs.Parse(args)
+	*formatFlag = resolveFormat(*formatFlag, *asJSON, "json")
 	jsonErr := isJSONFormat(*formatFlag)
 
 	ov, err := a.ComputeOverview(ctx, *since)
@@ -1318,7 +1335,9 @@ func handleActorHeartbeat(ctx context.Context, a *app.App, args []string) {
 func handleSchema(ctx context.Context, a *app.App, args []string) {
 	fs := flag.NewFlagSet("schema", flag.ExitOnError)
 	formatFlag := fs.String("format", flagDefault(a.Cfg.DefaultFormat, "text"), "text|json (env SHAREDWATCH_FORMAT)")
+	asJSON := fs.Bool("json", false, "alias for --format json (SW-AGENT-25)")
 	_ = fs.Parse(args)
+	*formatFlag = resolveFormat(*formatFlag, *asJSON, "json")
 	jsonErr := isJSONFormat(*formatFlag)
 	tables, err := a.Store.Schema(ctx)
 	if err != nil {

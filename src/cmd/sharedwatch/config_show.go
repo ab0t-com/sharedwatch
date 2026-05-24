@@ -34,15 +34,21 @@ func handleConfigShow(_ context.Context, cfg config.Config, search config.Search
 	}
 
 	if *asJSON {
+		// SW-AGENT-25 (F36-A): emit a presentation DTO with snake_case keys
+		// and human-readable duration strings, matching every other JSON
+		// endpoint. Previously dumped the raw config.Config struct, which
+		// produced Go CapitalCase keys and nanosecond-int durations — the
+		// only endpoint in the binary with that shape. The text-mode key
+		// names in effectiveConfigRows() are the source of truth.
 		envelope := struct {
-			FormatVersion       int               `json:"format_version"`
-			Effective           config.Config     `json:"effective"`
-			Env                 map[string]string `json:"env"`
-			ConfigFilesSearched []searchEntryJSON `json:"config_files_searched"`
-			ResolutionOrder     []string          `json:"resolution_order"`
+			FormatVersion       int                 `json:"format_version"`
+			Effective           effectiveConfigJSON `json:"effective"`
+			Env                 map[string]string   `json:"env"`
+			ConfigFilesSearched []searchEntryJSON   `json:"config_files_searched"`
+			ResolutionOrder     []string            `json:"resolution_order"`
 		}{
 			FormatVersion:       1,
-			Effective:           cfg,
+			Effective:           toEffectiveConfigJSON(cfg),
 			Env:                 envDetected,
 			ConfigFilesSearched: toSearchEntryJSON(search.Searched),
 			ResolutionOrder:     []string{"flag", "env", "config", "default"},
@@ -163,6 +169,83 @@ func defaultDashLocal(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// effectiveConfigJSON is the snake_case, duration-string presentation DTO for
+// `config show --json`. Field order mirrors effectiveConfigRows() so text and
+// JSON stay in step. Keys deliberately match the conventions used by
+// status/intent/lease/events JSON output (snake_case, human-readable
+// durations) — see SW-AGENT-25 (F36-A).
+type effectiveConfigJSON struct {
+	WatchPath  string     `json:"watch_path"`
+	DBPath     string     `json:"db_path"`
+	DataDir    string     `json:"data_dir,omitempty"`
+	WatchRoots []rootJSON `json:"watch_roots,omitempty"`
+
+	Actor         string `json:"actor,omitempty"`
+	ActorKind     string `json:"actor_kind,omitempty"`
+	Session       string `json:"session,omitempty"`
+	Task          string `json:"task,omitempty"`
+	Addressee     string `json:"addressee,omitempty"`
+	DefaultFormat string `json:"default_format,omitempty"`
+	DefaultRoot   string `json:"default_root,omitempty"`
+	DefaultSince  string `json:"default_since,omitempty"`
+	Hints         string `json:"hints,omitempty"`
+	CursorName    string `json:"cursor_name,omitempty"`
+
+	CoalesceWindow    string   `json:"coalesce_window"`
+	PassiveInterval   string   `json:"passive_interval"`
+	ActiveInterval    string   `json:"active_interval"`
+	ActiveTTL         string   `json:"active_ttl"`
+	ReconcileInterval string   `json:"reconcile_interval"`
+	MaxBatchSize      int      `json:"max_batch_size"`
+	RetentionDays     int      `json:"retention_days"`
+	ActorTTL          string   `json:"actor_ttl"`
+	HashEnabled       bool     `json:"hash_enabled"`
+	HashMaxSize       int64    `json:"hash_max_size"`
+	ProducerID        string   `json:"producer_id,omitempty"`
+	IgnorePatterns    []string `json:"ignore_patterns,omitempty"`
+	IncludePatterns   []string `json:"include_patterns,omitempty"`
+}
+
+type rootJSON struct {
+	Label string `json:"label"`
+	Path  string `json:"path"`
+}
+
+func toEffectiveConfigJSON(cfg config.Config) effectiveConfigJSON {
+	out := effectiveConfigJSON{
+		WatchPath:         cfg.WatchPath,
+		DBPath:            cfg.DBPath,
+		DataDir:           cfg.DataDir,
+		Actor:             cfg.Actor,
+		ActorKind:         cfg.ActorKind,
+		Session:           cfg.Session,
+		Task:              cfg.Task,
+		Addressee:         cfg.Addressee,
+		DefaultFormat:     cfg.DefaultFormat,
+		DefaultRoot:       cfg.DefaultRoot,
+		DefaultSince:      cfg.DefaultSince,
+		Hints:             cfg.Hints,
+		CursorName:        cfg.CursorName,
+		CoalesceWindow:    cfg.CoalesceWindow.String(),
+		PassiveInterval:   cfg.PassiveInterval.String(),
+		ActiveInterval:    cfg.ActiveInterval.String(),
+		ActiveTTL:         cfg.ActiveTTL.String(),
+		ReconcileInterval: cfg.ReconcileInterval.String(),
+		MaxBatchSize:      cfg.MaxBatchSize,
+		RetentionDays:     cfg.RetentionDays,
+		ActorTTL:          cfg.ActorTTL.String(),
+		HashEnabled:       cfg.HashEnabled,
+		HashMaxSize:       cfg.HashMaxSize,
+		ProducerID:        cfg.ProducerID,
+		IgnorePatterns:    cfg.IgnorePatterns,
+		IncludePatterns:   cfg.IncludePatterns,
+	}
+	for _, r := range cfg.WatchRoots {
+		out.WatchRoots = append(out.WatchRoots, rootJSON{Label: r.Label, Path: r.Path})
+	}
+	return out
 }
 
 type searchEntryJSON struct {

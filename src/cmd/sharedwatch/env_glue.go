@@ -100,3 +100,17 @@ func flagDefault(cfgVal, builtin string) string {
 	}
 	return builtin
 }
+
+// resolveFormat normalises the (--format <str>, --json <bool>) flag pair to a
+// single format string. Both flags exist on subcommands that originally only
+// had --format (events list, events stats, sql, overview, schema) so agents
+// don't have to remember which subcommands use which form — see SW-AGENT-25
+// (F36-C). If --json is true, the supplied jsonDefault ("json" or "jsonl"
+// depending on the command's natural shape) wins. Otherwise the --format
+// string value is returned as-is.
+func resolveFormat(formatFlag string, asJSON bool, jsonDefault string) string {
+	if asJSON {
+		return jsonDefault
+	}
+	return formatFlag
+}

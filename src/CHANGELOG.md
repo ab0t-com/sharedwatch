@@ -4,6 +4,24 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+## SW-AGENT-25 — output surface normalisation (v0.0.10 candidate)
+
+Bundles the three highest-impact F36 findings from scenario 36 dogfood. Closes the cross-cutting output-flag inconsistencies that surfaced as `events stats --json` errored, `status --actors --json` silently dropped the actors array, and `config show --json` was the lone Go-CapitalCase + nanosecond-duration outlier.
+
+### Fixed
+- **F36-A**: `config show --json` now emits **snake_case keys + human-readable duration strings** (e.g. `"coalesce_window": "5s"`, `"watch_path"`, `"db_path"`, `"max_batch_size"`) via a presentation DTO (`effectiveConfigJSON` in `config_show.go`). The internal `config.Config` struct is unchanged — only the JSON-rendering layer differs. Field ordering mirrors `effectiveConfigRows()` so text and JSON stay in step.
+- **F36-C**: All five subcommands that previously only accepted `--format <str>` now also accept `--json` as a bool alias: `events list --json` (→ `jsonl`, streaming), `events stats --json` (→ `json`), `sql --json` (→ `jsonl`), `overview --json` (→ `json`), `schema --json` (→ `json`). Resolution helper `resolveFormat(formatFlag, asJSON, jsonDefault)` in `env_glue.go`. Agents that internalised `--json` everywhere no longer get "flag provided but not defined" errors on these commands.
+- **F36-D**: `status --actors --json` now reliably emits `"actors": []` (or the populated array) when the flag is set, even with zero registered actors. Implementation: `StatusSnapshot.Actors` is now `*[]ActorView` (pointer-to-slice). Nil pointer → omitted (default status JSON unchanged when `--actors` isn't passed); non-nil pointer to empty slice → emits `[]`. The handler sets the pointer to a non-nil empty slice when `--actors` was explicitly requested.
+
+### Deferred (not in v0.0.10)
+- F36-B (`events stats` requires `--root`): the error message already points to `overview` for across-roots counts — this is good DX, not a bug. Documented in agent gotchas. No change.
+- F36-E (`status --actors` text-mode layout: actors appear after Next hints): cosmetic. Real fix would mean restructuring the text-mode render order; not worth the churn alone.
+
+### Compatibility
+- All changes are additive on the input side (`--json` flags added, no removals).
+- Output-side change for `config show --json` is a **breaking change** for anyone parsing the previous Go-CapitalCase shape. Mitigation: `config show --json` is a debugging/orientation tool, not part of the streaming surface — agent scripts almost never depend on its exact field names. Pre-existing callers must migrate from `WatchPath` to `watch_path`, etc.
+- `status --actors --json` shape change is additive (the `actors` field now reliably appears when the flag is set; previously it was sometimes silently dropped). No callers should break.
+
 ### Dogfooded — v0.0.9 install regression check + output-flag inconsistency probe (scenario 36)
 - Scenario 36 added to `docs/dogfood/test_dogfood.md`. Run end-to-end against the deployed v0.0.9 binary. SW-AGENT-23 Q2/Q3 fixes confirmed to hold in the production install (coalesced-into prints the prior id; intent + lease list emit JSONL).
 - 5 cross-cutting output-flag findings surfaced + documented as gotchas (no code fixes in-round — defer until they accumulate into a real ticket):

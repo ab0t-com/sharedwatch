@@ -100,9 +100,12 @@ type StatusSnapshot struct {
 	LastConsumerRun  *time.Time `json:"last_consumer_run,omitempty"`
 	LastReconcileRun *time.Time `json:"last_reconcile_run,omitempty"`
 	// Actors is populated only when the caller asks for it (via `status
-	// --actors`). The omitempty keeps the existing JSON shape stable for
-	// callers that don't pass the flag.
-	Actors []ActorView `json:"actors,omitempty"`
+	// --actors`). Pointer-to-slice with omitempty: nil → omitted (default
+	// status JSON shape unchanged); non-nil pointer → emitted, even if the
+	// underlying slice is empty (so `--actors --json` with zero registered
+	// actors still surfaces `"actors": []` rather than silently dropping
+	// the key). SW-AGENT-25 (F36-D).
+	Actors *[]ActorView `json:"actors,omitempty"`
 	// Roots is populated only when multi-root is configured (Cfg.WatchRoots
 	// non-empty). Single-root setups never emit this key — preserves the
 	// pre-SW-AGENT-3 JSON contract for legacy callers.
