@@ -91,10 +91,14 @@ sharedwatch config show
 #    the same DRY RUN plan as a real version; the 404 only fires on
 #    --apply. A clean dry-run is NOT proof the target is real.
 #
-# 4. `lease list --all` shows EXPIRED leases (TTL ran out) but NOT
-#    RELEASED leases. Released = deleted; --all only surfaces ones
-#    that lived out their TTL. For a full audit of grant/release
-#    history, query the events journal directly.
+# 4. `--all` on coordination-surface list commands is a TTL-EXPIRY
+#    filter, not a soft-delete filter. `lease list --all` and
+#    `intent list --all` both surface only entries that lived out
+#    their TTL; explicitly released leases and revoked intents are
+#    HARD-DELETED, not retained. For a full audit trail of grant/
+#    release or declare/revoke, query the events journal (note:
+#    intent declare/revoke currently does NOT emit events — track
+#    via `intent list --json` polling, or file a request).
 #
 # 5. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
 #    real file changes the watcher picks up, NOT on `test emit`. To
@@ -104,6 +108,19 @@ sharedwatch config show
 # 6. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
 #    Older docs may show `acquire`; the binary only accepts grant/release/
 #    renew/list.
+#
+# 7. `intent list` text vs JSON column names DIFFER: text labels read
+#    `actor=`/`path=`; the JSON shape uses `actor_id`/`path_glob`
+#    (and the wrapping `id` is `intent_id`). When piping to jq, use
+#    the JSON names. `intent list --json` also returns a bare ARRAY
+#    (or `null` when empty), not an envelope object.
+#
+# 8. `test emit` for an already-emitted (actor,path) pair within the
+#    5s coalesce window returns a NEW evt_id but the underlying row
+#    is merged into the prior event. Do not record that id and try
+#    to reference it later — `events list` will not surface it. If
+#    you need to know whether your emit landed as a fresh row, query
+#    by path+actor right after.
 
 # 3. "What's new since I last looked?" — idempotent across calls
 sharedwatch events list --cursor-name <your-actor-id> \

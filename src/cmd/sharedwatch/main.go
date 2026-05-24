@@ -993,6 +993,11 @@ func handleIntent(ctx context.Context, a *app.App, args []string) {
 	switch args[0] {
 	case "declare":
 		fs := flag.NewFlagSet("intent declare", flag.ExitOnError)
+		fs.Usage = func() {
+			fmt.Fprintln(fs.Output(), "usage: sharedwatch intent declare <path-glob> --actor <id> [--ttl 10m] [--task ...] [--intent ...] [--metadata <json>]")
+			fmt.Fprintln(fs.Output(), "flags:")
+			fs.PrintDefaults()
+		}
 		actor := fs.String("actor", "", "actor declaring the intent (required)")
 		ttl := fs.Duration("ttl", 10*time.Minute, "how long the intent remains active")
 		task := fs.String("task", "", "short task label")
@@ -1006,7 +1011,8 @@ func handleIntent(ctx context.Context, a *app.App, args []string) {
 		}
 		_ = fs.Parse(rest)
 		if pathGlob == "" || *actor == "" {
-			fatal(fmt.Errorf("usage: sharedwatch intent declare <path-glob> --actor <id> [--ttl 10m] [--task ...] [--intent ...]"))
+			fs.Usage()
+			os.Exit(2)
 		}
 		if *ttl <= 0 {
 			fatal(fmt.Errorf("--ttl must be positive"))
@@ -1054,8 +1060,12 @@ func handleIntent(ctx context.Context, a *app.App, args []string) {
 			fmt.Printf("%s  actor=%s  path=%s  task=%s  expires=%s\n", r.IntentID, r.ActorID, r.PathGlob, defaultDash(r.Task), r.ExpiresAt.Format(time.RFC3339))
 		}
 	case "revoke":
-		if len(args) < 2 {
-			fatal(fmt.Errorf("usage: sharedwatch intent revoke <intent-id>"))
+		if len(args) < 2 || args[1] == "-h" || args[1] == "--help" {
+			fmt.Fprintln(os.Stderr, "usage: sharedwatch intent revoke <intent-id>")
+			if len(args) < 2 {
+				os.Exit(2)
+			}
+			return
 		}
 		if err := a.Store.RevokeIntent(ctx, args[1]); err != nil {
 			fatal(err)

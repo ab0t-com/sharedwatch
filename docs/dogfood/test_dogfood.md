@@ -1323,3 +1323,126 @@ XDG_CONFIG_HOME="$DOG/xdg" $SW --data-dir "$DOG/data" config show | sed -n '/CON
 **Pass criteria:** (a) explicit > everything; (b) project-local > XDG; (c) XDG fallback works; (d) search trail correctly marks loaded vs shadowed.
 
 **Recorded run:** see worklog summary below.
+
+---
+
+## Scenario 33 — intent lifecycle (declare → list → revoke) — v0.0.8
+
+**Why:** the `intent` subcommand is the least-touched part of the coordination surface (vs leases / events). Worth a full lifecycle run.
+
+```bash
+DOG=/tmp/dog-33-35; rm -rf $DOG && mkdir -p $DOG/watch
+export XDG_DATA_HOME=$DOG XDG_CONFIG_HOME=$DOG SHAREDWATCH_FORMAT=jsonl
+$SW init --watch $DOG/watch
+
+# (a) declare
+$SW intent declare "auth/**" --actor agent-alpha --intent "refactor auth" --task auth-refactor --ttl 10m
+$SW intent declare "tests/**" --actor agent-beta --intent "write tests" --task test-coverage --ttl 5m
+
+# (b) list (text + JSON)
+$SW intent list
+$SW intent list --actor agent-alpha
+$SW intent list --path-glob "auth/**"
+$SW intent list --json | jq .
+
+# (c) revoke (CAUTION: JSON key is `intent_id`, NOT `id`)
+ID=$($SW intent list --json | jq -r '.[] | select(.actor_id=="agent-alpha") | .intent_id')
+$SW intent revoke "$ID"
+
+# (d) verify removed; check --all
+$SW intent list                  # only beta remains
+$SW intent list --all            # also only beta — revoked is hard-deleted
+
+# (e) does revoke emit an event?
+$SW events list --since 5m --type intent.revoked --format jsonl   # empty
+```
+
+**What this exercises:** `intent declare/list/revoke` end-to-end, `--all` semantics on revoked intents, JSON vs text output parity, journal emission parity with leases.
+
+**Pass criteria:** declare/list/revoke succeed; filters narrow correctly; --all does NOT surface revoked.
+
+**Findings:**
+- F33-A: text labels (`actor=`/`path=`) differ from JSON keys (`actor_id`/`path_glob`). Documented as gotcha.
+- F33-B: `intent list --all` does not show revoked intents — same hard-delete pattern as `lease list --all` for released leases. Gotcha generalised to cover both.
+- F33-C (deeper design): intent declare/revoke do NOT emit events. Filed `docs/design/intent-events-discussion-20260524.md`.
+- F33-D (deeper design): `intent list --json` returns bare array, not envelope; empty = bare `null`. Filed in same disc doc.
+- F33-E: `intent declare --help` didn't show `<path-glob>` positional → **fixed in-round** (added custom `fs.Usage`).
+- F33-F: `intent revoke --help` errored "intent not found: --help" → **fixed in-round** (detect -h/--help, print usage).
+
+---
+
+## Scenario 34 — cross-actor coalesce regression (SW-AGENT-11) — v0.0.8
+
+**Why:** SW-AGENT-11 made coalesce actor-aware. Verify that two actors editing the same path within the coalesce window produce two distinct events (not merged), while the same actor editing twice still coalesces.
+
+```bash
+# Continuation of scenario 33 environment.
+$SW test emit "src/auth.go" --actor agent-alpha --task auth-refactor   # event A (alpha)
+$SW test emit "src/auth.go" --actor agent-beta --task review           # event B (beta — distinct)
+$SW test emit "src/auth.go" --actor agent-alpha --task auth-refactor   # emit C — should coalesce into A
+
+# Expect: 2 rows (alpha + beta), not 3.
+$SW events list --path-glob "src/auth.go" --since 5m --format jsonl | jq -r '.id'
+$SW events list --path-glob "src/auth.go" --since 5m --format jsonl \
+  | jq -r '.payload_json | fromjson | .actor' | sort | uniq -c
+# Expect: "1 agent-alpha" + "1 agent-beta"
+
+# Confirm phantom: the C emit returned an id — does it exist?
+$SW sql "SELECT id FROM events WHERE id='<the_C_id>'"   # empty
+```
+
+**What this exercises:** `internal/events` coalesce window with per-actor identity; the `test emit` CLI output contract under coalesce.
+
+**Pass criteria:** exactly 2 rows; 1 alpha + 1 beta; emit C's id does NOT appear in DB.
+
+**Findings:**
+- Cross-actor coalesce correctness: ✓ confirmed (1 alpha + 1 beta).
+- F34-A (deeper design): `test emit` returns a fresh `evt_id` even when the row coalesces away. CLI advertises a write that didn't land as a new row. Documented as gotcha + filed in `intent-events-discussion-20260524.md` as Q2.
+
+---
+
+## Scenario 35 — events list combined-filter matrix — v0.0.8
+
+**Why:** the `events list` filter surface combines `--type`, `--status`, `--path-glob`, `--payload-key/--payload-value`, repeatable `--type`, and `--fields` projection. Verify each filter narrows correctly when stacked.
+
+```bash
+# Continuation environment from scenarios 33/34.
+$SW test emit "code/foo.go"   --actor agent-alpha --task feat1
+$SW test emit "code/bar.go"   --actor agent-beta  --task feat2
+$SW test emit "tests/baz.go"  --actor agent-alpha --task feat1
+$SW test emit "docs/quux.md"  --actor agent-beta  --task docs
+
+# (a) --type alone
+$SW events list --since 5m --type file.modified --format jsonl | jq -r '.id + " " + .rel_path'
+
+# (b) --type + --path-glob narrows further
+$SW events list --since 5m --type file.modified --path-glob "code/**" --format jsonl | jq -r '.rel_path'
+# Expect: code/foo.go, code/bar.go only.
+
+# (c) --type + --status
+$SW events list --since 5m --type file.modified --status pending --format jsonl | jq -r '.rel_path'
+
+# (d) payload-key/value filter
+$SW events list --since 5m --payload-key actor --payload-value agent-alpha --format jsonl \
+  | jq -r '.rel_path + " " + (.payload_json | fromjson | .actor)'
+
+# (e) full stack: type + path + payload
+$SW events list --since 5m --type file.modified --path-glob "code/**" \
+  --payload-key actor --payload-value agent-alpha --format jsonl \
+  | jq -r '.rel_path + " | " + (.payload_json | fromjson | .actor)'
+# Expect: exactly code/foo.go | agent-alpha
+
+# (f) repeatable --type
+$SW events list --since 5m --type file.modified --type file.created --format jsonl \
+  | jq -r '.type' | sort | uniq -c
+
+# (g) --fields projection
+$SW events list --since 5m --type file.modified --fields id,rel_path --format jsonl | head -2
+```
+
+**What this exercises:** `events list` filter composition, repeatable `--type`, payload post-filter, column projection.
+
+**Pass criteria:** every filter narrows correctly; combined filters AND, not OR; --fields projection returns only requested columns.
+
+**Findings:** **All 8 sub-cases pass.** Filter matrix is solid. No action.
+

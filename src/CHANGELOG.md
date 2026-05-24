@@ -4,6 +4,29 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — dogfood scenarios 33/34/35 (v0.0.8 dogfood, intent/coalesce/filter axis)
+- 33: full intent lifecycle (declare → list → revoke; text/JSON; --all).
+- 34: cross-actor coalesce regression check (SW-AGENT-11).
+- 35: events list combined-filter matrix (--type × --path-glob × --status × payload × --fields).
+- Run end-to-end against deployed v0.0.8. Net: 2 small UX bugs **fixed in-round**, 3 gotchas **documented**, 3 deeper-design questions **filed as `docs/design/intent-events-discussion-20260524.md`** for triage.
+
+### Fixed — `intent declare --help` and `intent revoke --help`
+- `intent declare --help` now shows the `<path-glob>` positional in its usage line (custom `fs.Usage`). Previously listed only flag descriptions, hiding that `<path-glob>` is required.
+- `intent revoke --help` no longer treats `--help` as a positional id ("intent not found: --help") — now prints the usage string and exits 0. Behaviour matches every other subcommand's `--help`.
+
+### Documented — three intent/coalesce gotchas (scenarios 33, 34)
+- `--all` on coordination-list commands (both `lease list` and `intent list`) is a **TTL-expiry filter, not a soft-delete filter**. Released leases and revoked intents are hard-deleted; `--all` only surfaces TTL-expired entries. Generalises the gotcha from the previous round to cover both subcommands.
+- `intent list --json` returns a **bare array** (not `{"intents":[...]}`) with **different column names than text form** (`actor_id`/`path_glob` vs `actor=`/`path=`); empty result is bare `null`.
+- `test emit` against an `(actor, path)` already emitted within the 5s coalesce window returns a **fresh `evt_id`** but coalesces into the prior event — agents recording the returned id will hit a phantom (not in DB).
+- All three documented in `docs/agent/agent-system-prompt-20260522.md` and `Skills/sharedwatch-client/SKILL.md` startup ritual.
+
+### Filed for design — `docs/design/intent-events-discussion-20260524.md`
+- Three open questions surfaced by dogfood that warrant a design call, not impulse fixes:
+  - Q1: should `intent declare`/`revoke` emit events (parity with `lease.granted`/`lease.released`)?
+  - Q2: should `test emit` print `coalesced into <prior_id>` instead of a phantom `emitted <new_id>` when the coalesce path triggers?
+  - Q3: should `intent list --json` switch to JSONL (matching `events list`/`lease list`) for output-envelope consistency?
+- Recommended: bundle as **SW-AGENT-23 — intent surface parity** for v0.0.9.
+
 ### Added — dogfood scenarios 30/31/32 (v0.0.8 dogfood)
 - 30: mode active TTL lifecycle (active→passive transitions, TTL expiry).
 - 31: full lease lifecycle (grant → list → renew → release; --all filter).
