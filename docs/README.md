@@ -28,6 +28,7 @@ Read-only thinking artifacts. Some become tickets; some stay as the *why* behind
 | [`design/future-features-20260523.md`](design/future-features-20260523.md) | 2026-05-23 | 15 predicted next-features ranked by usage × need × design-fit, framed as complaints an agent will make in six months. | Predictive |
 | [`design/hooks-discussion-20260524.md`](design/hooks-discussion-20260524.md) | 2026-05-24 | Discussion: does sharedwatch need a hooks system? What shape fits the calm/pull architecture? Recommendation: build `--on-digest <command>` only, when a real user asks for it. | Discussion → on-demand |
 | [`design/defaults-audit-20260524.md`](design/defaults-audit-20260524.md) | 2026-05-24 | Audit of every CLI flag against "does the agent repeat this every time?". Phase 1 (the two known gaps) shipped in v0.0.5; Phase 2 (env-var-driven agent identity) + Phase 3 (cursor auto-default) deferred for review. | Action list |
+| [`design/sharedwatchignore-discussion-20260524.md`](design/sharedwatchignore-discussion-20260524.md) | 2026-05-24 | Discussion: should sharedwatch support a `.sharedwatchignore` file like `.gitignore`? Recommendation: yes, build as SW-AGENT-22, ship v0.0.9 — subset of gitignore syntax, per-root, mtime-cached hot-reload, no negation in v1. | Discussion → ready to ticket |
 
 ---
 
