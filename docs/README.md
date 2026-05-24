@@ -63,6 +63,17 @@ These are not docs about agents — they are docs *for* agents. The system promp
 
 ---
 
+## [`brand/`](brand/) — branding and marketing assets
+
+Two parallel image-prompt sets covering the *same fifteen images* (same uses, same aspect ratios) in two distinct visual registers. Pick one for the public rollout; run both first, compare in context, decide.
+
+| File | Date | Register | What's in it |
+|---|---|---|---|
+| [`brand/image-prompts-20260524.md`](brand/image-prompts-20260524.md) | 2026-05-24 | **v1 — photographic, watchmaker's-bench** | Fifteen prompts with Photoshop-layer thinking, slate-stone + aged-cream + brass palette, golden-hour photography references (Kinfolk, Stripe Press, Joel Meyerowitz). Lighthouse-at-dawn aesthetic. |
+| [`brand/image-prompts-v2-cute-20260524.md`](brand/image-prompts-v2-cute-20260524.md) | 2026-05-24 | **v2 — cute cartoon, J×A corporate launch** | The same fifteen prompts restyled to a Notion-meets-Sanrio-meets-Studio-Ghibli illustration register. Pastel palette (peach, mint, lavender) with one warm accent per scene. Lighthouse-as-friendly-mascot. |
+
+---
+
 ## [`dogfood/`](dogfood/) — runnable test scenarios + findings
 
 | File | Date | What's in it |
@@ -91,6 +102,7 @@ The docs reference each other heavily. The high-traffic edges:
 | A formal spec or original requirements | `docs/specs/` |
 | The AI-agent consumer's experience | `docs/agent/` |
 | A test scenario or post-test findings | `docs/dogfood/` |
+| Branding, marketing copy, image briefs | `docs/brand/` |
 | Schema, internal pipeline flow, operator guide | `../src/docs/` (program-internal, not here) |
 | A team contract or process | `docs/` top-level (like `TEAM.md`) |
 

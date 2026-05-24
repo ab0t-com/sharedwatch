@@ -1,3 +1,17 @@
+<p align="center">
+  <img src="docs/brand/hero.png" alt="sharedwatch — calm, pull-based activity feed for a local shared folder" width="1200" height="675" style="max-width: 100%; height: auto;">
+</p>
+
+<!--
+  Hero image lives at docs/brand/hero.png (16:9, ideal source: 1920x1080
+  or larger; rendered to 1200x675 in the README). See
+  docs/brand/image-prompts-20260524.md prompt #1 (v1, photographic) or
+  docs/brand/image-prompts-v2-cute-20260524.md prompt #1 (v2, cute) for
+  the generation brief. The shape-checker pipeline will pad/crop drift
+  back to 16:9 — but the prompt is written to that ratio so composition
+  arrives correct.
+-->
+
 # sharedwatch
 
 > Calm, durable, pull-based activity feed for a local shared folder.
