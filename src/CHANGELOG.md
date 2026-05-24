@@ -4,6 +4,18 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — smart hints / next-step suggestions (SW-AGENT-17)
+- New `internal/hints` package: a small, profile-driven, modular engine for emitting "what to run next" suggestions alongside CLI output. Zero imports from other sharedwatch packages — designed to be lifted into a standalone module later (`git mv internal/hints/ <newmod>/hints/` is the extract recipe).
+- Four built-in profiles: `default` (≤4 hints, human-facing, with reasons), `agent` (≤8 hints, designed for AI consumers reading JSON), `terse` (1 hint, no reason), `off` (none).
+- Resolution order: `--hints <profile>` flag > `SHAREDWATCH_HINTS` env var > auto-promote to `agent` when `--format json` is set > `default`.
+- Per-command providers wired for: `status`, `roots`, `digest list`, `digest show`, `events stats`, `events list` (cursor mode), `init`, `version`, `overview`. Hints are state-derived (only shown when applicable: no "consume" hint when pending=0).
+- **JSON envelope addition.** `status`, `roots`, `overview`, `events stats` envelopes gain an `omitempty` `next: [{name, command, reason}]` array. `format_version` stays 1 (additive).
+- **Text addition.** A `Next:` block, two-space-indented and column-aligned via `text/tabwriter`, prints after a command's main output when hints apply.
+
+### Changed — `overview` and `events stats` JSON: `drill` map removed in favour of unified `next` array
+- The literal `drill: { "key": "command" }` map that v0.0.3 emitted on `sharedwatch overview --format json` and `sharedwatch events stats --root X --format json` is gone. Replaced with the unified `next: [{name, command, reason}]` array driven by the new hints engine.
+- Same conceptual purpose (pre-computed follow-up commands) but uniform shape across every command that emits hints. **Breaking shape** — flagged here. Migrate consumers by reading `.next[].command` instead of `.drill[<key>]`.
+
 ### Added — `roots` subcommand
 - `sharedwatch roots` prints the list of watched folders as a labelled table (LABEL, PATH, PENDING, LAST EVENT). Works for both single-root (synthesises a `(default)` row from `Cfg.WatchPath`) and multi-root setups. `--json` emits a `format_version: 1` envelope with a `mode` field (`single`|`multi`) and a `roots[]` array.
 - Closes the recurring UX question of "what folders is sharedwatch listening to?" — previously discoverable only via `status --json | jq '.roots'`, which returned empty in single-root mode.

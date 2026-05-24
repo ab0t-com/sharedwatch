@@ -87,16 +87,23 @@ func TestEventsStatsMultiRoot(t *testing.T) {
 	if stats.ByActor["claude-X"] != 2 {
 		t.Fatalf("by_actor[claude-X] should be 2, got %d", stats.ByActor["claude-X"])
 	}
-	if len(stats.Drill) == 0 {
-		t.Fatal("drill map should never be empty")
+	if len(stats.Next) == 0 {
+		t.Fatal("next hints should never be empty (top type / top actor / top paths)")
 	}
-	if v, ok := stats.Drill["by_path"]; !ok || !strings.Contains(v, "--root auth") {
-		t.Fatalf("by_path drill should reference --root auth: %q", v)
+	foundRootScoped := false
+	for _, h := range stats.Next {
+		if strings.Contains(h.Command, "--root auth") {
+			foundRootScoped = true
+			break
+		}
+	}
+	if !foundRootScoped {
+		t.Fatalf("at least one Next hint should reference --root auth, got %+v", stats.Next)
 	}
 }
 
 func TestEventsStatsFormatVersionIsFirstKey(t *testing.T) {
-	s := EventsStats{FormatVersion: 1, ByType: map[string]int{}, ByActor: map[string]int{}, Drill: map[string]string{}}
+	s := EventsStats{FormatVersion: 1, ByType: map[string]int{}, ByActor: map[string]int{}}
 	b, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)

@@ -4,7 +4,7 @@
 .\"
 .\" Source of truth for the program: src/cmd/sharedwatch/main.go
 .\" When commands or flags change, update this file in the same PR.
-.TH SHAREDWATCH 1 "2026-05-24" "v0.0.2" "User Commands"
+.TH SHAREDWATCH 1 "2026-05-24" "v0.0.4" "User Commands"
 .SH NAME
 sharedwatch \- calm, pull-based activity journal for a local shared folder
 .SH SYNOPSIS
@@ -169,6 +169,14 @@ Log format. Default \fItext\fR.
 .BR --log-level " " debug|info|warn|error
 Log level. Default \fIinfo\fR.
 .TP
+.BR --hints " " default|agent|terse|off
+Next-step suggestions profile. \fIdefault\fR shows up to 4 contextual
+hints in human output; \fIagent\fR shows up to 8 hints designed for AI
+agents reading the JSON envelope; \fIterse\fR shows at most 1 hint
+without a reason line; \fIoff\fR suppresses entirely. Resolution order:
+flag > env (\fBSHAREDWATCH_HINTS\fR) > auto-promote to \fIagent\fR for
+\fB--format json\fR > \fIdefault\fR.
+.TP
 .BR --version
 Same as the \fBversion\fR subcommand.
 .SH ATTRIBUTION FLAGS
@@ -282,6 +290,11 @@ ignored if missing. Override with \fB--config\fR.
 .B XDG_DATA_HOME
 Base directory for default \fIdata_dir\fR. Defaults to
 \fI$HOME/.local/share\fR when unset.
+.TP
+.B SHAREDWATCH_HINTS
+Default profile for next-step suggestions. One of \fIdefault\fR,
+\fIagent\fR, \fIterse\fR, \fIoff\fR. Overridden by the \fB--hints\fR
+flag. See \fB--hints\fR under GLOBAL FLAGS for resolution rules.
 .SH EXIT STATUS
 .TP
 .B 0

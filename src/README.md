@@ -95,6 +95,7 @@ sharedwatch [global flags] <command> [command flags] [args]
 | `--producer <id>` | `<host>:<pid>` | Stamps `events.producer_id` on emitted events |
 | `--log-format text\|json` | `text` | `json` for log aggregators |
 | `--log-level debug\|info\|warn\|error` | `info` | |
+| `--hints default\|agent\|terse\|off` | `default` (text) / `agent` (json) | Next-step suggestions profile. Env: `SHAREDWATCH_HINTS`. JSON auto-promotes to `agent` unless overridden. |
 | `--version` | — | Same as the `version` subcommand |
 
 ## Attribution flags (payload_json v1)

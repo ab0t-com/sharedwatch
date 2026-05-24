@@ -35,13 +35,14 @@ func TestOverviewEmptyDB(t *testing.T) {
 	if ov.EventsInRange != 0 || ov.Pending != 0 {
 		t.Fatalf("expected empty counts, got pending=%d events_in_range=%d", ov.Pending, ov.EventsInRange)
 	}
-	// `drill` is always present, even for empty journals.
-	if len(ov.Drill) == 0 {
-		t.Fatal("drill map should never be empty")
+	// `next` is always present, even for empty journals (core drills:
+	// events_recent + events_by_type).
+	if len(ov.Next) == 0 {
+		t.Fatal("next hints should never be empty")
 	}
-	for k, v := range ov.Drill {
-		if !strings.HasPrefix(v, "sharedwatch ") {
-			t.Fatalf("drill[%s] should start with `sharedwatch `, got %q", k, v)
+	for _, h := range ov.Next {
+		if !strings.HasPrefix(h.Command, "sharedwatch ") {
+			t.Fatalf("Next hint %s: command should start with `sharedwatch `, got %q", h.Name, h.Command)
 		}
 	}
 }
@@ -87,22 +88,28 @@ func TestOverviewMultiRoot(t *testing.T) {
 	if ov.EventsInRange != 2 {
 		t.Fatalf("events_in_range: want 2, got %d", ov.EventsInRange)
 	}
-	gotAuthDrill, ok := ov.Drill["root:auth"]
-	if !ok {
-		t.Fatal("drill missing root:auth")
+	foundRootHint := false
+	foundActorHint := false
+	for _, h := range ov.Next {
+		if strings.Contains(h.Command, "--root auth") {
+			foundRootHint = true
+		}
+		if strings.Contains(h.Command, "actor") && strings.Contains(h.Command, "claude-X") {
+			foundActorHint = true
+		}
 	}
-	if !strings.Contains(gotAuthDrill, "--root auth") {
-		t.Fatalf("root:auth drill should reference --root auth: %q", gotAuthDrill)
+	if !foundRootHint {
+		t.Fatalf("Next hints missing one for --root auth: %+v", ov.Next)
 	}
-	if _, ok := ov.Drill["actor:claude-X"]; !ok {
-		t.Fatal("drill missing actor:claude-X")
+	if !foundActorHint {
+		t.Fatalf("Next hints missing one for actor=claude-X: %+v", ov.Next)
 	}
 }
 
 func TestOverviewFormatVersionIsFirstKey(t *testing.T) {
 	// JSON key ordering is part of the contract; format_version must be the
 	// first key so consumers can validate the schema before scanning fields.
-	ov := Overview{FormatVersion: 1, Drill: map[string]string{}}
+	ov := Overview{FormatVersion: 1}
 	b, err := json.Marshal(ov)
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,7 @@ import (
 
 	"sharedwatch/internal/db"
 	"sharedwatch/internal/events"
+	"sharedwatch/internal/hints"
 )
 
 // EventsStats is the L2 progressive-disclosure envelope: a focused look at one
@@ -15,15 +16,18 @@ import (
 // bounded and forces agents to choose the dimension before drilling — see
 // `docs/design/disclosure-attribution-discussion-20260522.md` §1.4.
 type EventsStats struct {
-	FormatVersion int               `json:"format_version"`
-	GeneratedAt   time.Time         `json:"generated_at"`
-	Root          string            `json:"root"`
-	Window        StatsWindow       `json:"window"`
-	ByType        map[string]int    `json:"by_type"`
-	ByActor       map[string]int    `json:"by_actor"`
-	TopPaths      []PathStat        `json:"top_paths"`
-	Hourly        []HourlyBucket    `json:"hourly"`
-	Drill         map[string]string `json:"drill"`
+	FormatVersion int            `json:"format_version"`
+	GeneratedAt   time.Time      `json:"generated_at"`
+	Root          string         `json:"root"`
+	Window        StatsWindow    `json:"window"`
+	ByType        map[string]int `json:"by_type"`
+	ByActor       map[string]int `json:"by_actor"`
+	TopPaths      []PathStat     `json:"top_paths"`
+	Hourly        []HourlyBucket `json:"hourly"`
+	// Next replaces the v0.0.3 `drill` map with the unified hints engine
+	// (SW-AGENT-17). Pre-computed narrow-by-type and narrow-by-actor
+	// commands scoped to this root.
+	Next []hints.Hint `json:"next,omitempty"`
 }
 
 type StatsWindow struct {
@@ -126,21 +130,43 @@ func (a *App) ComputeEventsStats(ctx context.Context, root string, since time.Du
 		return stats.Hourly[i].Hour.Before(stats.Hourly[j].Hour)
 	})
 
-	stats.Drill = buildStatsDrill(stats)
+	stats.Next = buildStatsNext(stats)
 	return stats, nil
 }
 
-func buildStatsDrill(s EventsStats) map[string]string {
-	d := map[string]string{
-		"by_path":  fmt.Sprintf("sharedwatch events list --root %s --path-glob '<PATH>' --since 24h --format jsonl", s.Root),
-		"by_actor": fmt.Sprintf("sharedwatch events list --root %s --payload-key actor --payload-value <ACTOR> --since 24h --format jsonl", s.Root),
-		"by_type":  fmt.Sprintf("sharedwatch events list --root %s --type <TYPE> --since 24h --format jsonl", s.Root),
+// buildStatsNext invokes the hints engine for events stats. Picks top type
+// (first ByType entry) and top actor (first ByActor entry) to produce
+// concrete narrow-by-X drill commands.
+func buildStatsNext(s EventsStats) []hints.Hint {
+	var topType, topActor string
+	maxType := 0
+	for t, c := range s.ByType {
+		if c > maxType {
+			maxType, topType = c, t
+		}
 	}
-	// Concrete drill entries for the top paths the caller will likely want.
+	maxActor := 0
+	for a, c := range s.ByActor {
+		if c > maxActor {
+			maxActor, topActor = c, a
+		}
+	}
+	set := hints.For("events stats", hints.Context{
+		Profile:      hints.ProfileAgent,
+		StatsRoot:    s.Root,
+		StatsTopType: topType,
+		TopActor:     topActor,
+	})
+	// Add concrete top-path drills (these are specific to this command's
+	// data, so live here rather than in the generic provider).
 	for _, ps := range s.TopPaths {
-		d["path:"+ps.Path] = fmt.Sprintf("sharedwatch events list --root %s --path-glob %q --since 24h --format jsonl", s.Root, ps.Path)
+		set.Hints = append(set.Hints, hints.Hint{
+			Name:    "path:" + ps.Path,
+			Command: fmt.Sprintf("sharedwatch events list --root %s --path-glob %q --since 24h --format jsonl", s.Root, ps.Path),
+			Reason:  fmt.Sprintf("recent events on path '%s' (%d events)", ps.Path, ps.Events),
+		})
 	}
-	return d
+	return set.Hints
 }
 
 func containsStr(ss []string, s string) bool {

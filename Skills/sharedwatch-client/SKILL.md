@@ -51,6 +51,13 @@ sharedwatch events list --since 1h \
 sharedwatch update             # check; prints what would change
 sharedwatch update --apply     # download + SHA-256 verify + atomic-swap binary
 
+# Smart hints — recommend running with --hints agent (or set
+# SHAREDWATCH_HINTS=agent) so every command's output carries a
+# `next[]` array of pre-computed follow-up commands. JSON output
+# auto-promotes to the agent profile, so for human text invocations
+# the flag is the way to opt in.
+sharedwatch --hints agent status --json | jq '.next'
+
 # 3. "What's new since I last looked?" — idempotent across calls
 sharedwatch events list --cursor-name <your-actor-id> \
   --limit 50 --format jsonl

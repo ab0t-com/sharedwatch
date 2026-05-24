@@ -3,9 +3,10 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"time"
+
+	"sharedwatch/internal/hints"
 )
 
 // (asInt helper used elsewhere; declared in overview_helpers.go)
@@ -18,18 +19,21 @@ import (
 // FormatVersion is the first key emitted in JSON output (see field tags +
 // struct field order; Go's encoding/json preserves declared field order).
 type Overview struct {
-	FormatVersion int               `json:"format_version"`
-	GeneratedAt   time.Time         `json:"generated_at"`
-	Since         string            `json:"since"`
-	Mode          string            `json:"mode"`
-	Pending       int               `json:"pending"`
-	Failed        int               `json:"failed"`
-	EventsInRange int               `json:"events_in_range"`
-	ByType        []TypeCount       `json:"by_type"`
-	TopActors     []ActorCount      `json:"top_actors"`
-	Roots         []RootView        `json:"roots,omitempty"`
-	ActiveActors  []ActorView       `json:"active_actors,omitempty"`
-	Drill         map[string]string `json:"drill"`
+	FormatVersion int          `json:"format_version"`
+	GeneratedAt   time.Time    `json:"generated_at"`
+	Since         string       `json:"since"`
+	Mode          string       `json:"mode"`
+	Pending       int          `json:"pending"`
+	Failed        int          `json:"failed"`
+	EventsInRange int          `json:"events_in_range"`
+	ByType        []TypeCount  `json:"by_type"`
+	TopActors     []ActorCount `json:"top_actors"`
+	Roots         []RootView   `json:"roots,omitempty"`
+	ActiveActors  []ActorView  `json:"active_actors,omitempty"`
+	// Next replaces the v0.0.3 `drill` map with the unified hints engine
+	// (SW-AGENT-17). Same conceptual purpose — pre-computed follow-up
+	// commands — but uniform shape across every command that emits hints.
+	Next []hints.Hint `json:"next,omitempty"`
 }
 
 type TypeCount struct {
@@ -103,8 +107,37 @@ func (a *App) buildOverview(ctx context.Context, since time.Duration) (Overview,
 	if actors, err := a.ActorsView(ctx); err == nil && len(actors) > 0 {
 		ov.ActiveActors = actors
 	}
-	ov.Drill = buildDrillMap(ov)
+	ov.Next = buildOverviewNext(ov)
 	return ov, nil
+}
+
+// buildOverviewNext invokes the hints engine to populate the Next slice.
+// Defaults to the agent profile because overview is the L1 endpoint
+// agents poll — they benefit from the broader set of drill suggestions.
+func buildOverviewNext(ov Overview) []hints.Hint {
+	topActors := make([]string, 0, len(ov.TopActors))
+	for _, ac := range ov.TopActors {
+		topActors = append(topActors, ac.Actor)
+	}
+	topTypes := make([]string, 0, len(ov.ByType))
+	for _, tc := range ov.ByType {
+		topTypes = append(topTypes, tc.Type)
+		if len(topTypes) >= 3 {
+			break
+		}
+	}
+	roots := make([]hints.RootRef, 0, len(ov.Roots))
+	for _, r := range ov.Roots {
+		roots = append(roots, hints.RootRef{Label: r.Label, Path: r.Path, Pending: r.Pending})
+	}
+	set := hints.For("overview", hints.Context{
+		Profile:   hints.ProfileAgent,
+		Failed:    ov.Failed,
+		Roots:     roots,
+		TopActors: topActors,
+		TopTypes:  topTypes,
+	})
+	return set.Hints
 }
 
 // aggregateByType walks the since-bounded event set via the structured query
@@ -167,21 +200,6 @@ func (a *App) aggregateTopActors(ctx context.Context, since time.Time, limit int
 		out = out[:limit]
 	}
 	return out, nil
-}
-
-func buildDrillMap(ov Overview) map[string]string {
-	d := map[string]string{
-		"events_recent":  "sharedwatch events list --since 1h --format jsonl",
-		"events_failed":  "sharedwatch events list --status failed --format jsonl",
-		"events_by_type": "sharedwatch sql \"SELECT type, COUNT(*) FROM events GROUP BY type\"",
-	}
-	for _, r := range ov.Roots {
-		d["root:"+r.Label] = fmt.Sprintf("sharedwatch events list --root %s --since 1h --format jsonl", r.Label)
-	}
-	for _, ac := range ov.TopActors {
-		d["actor:"+ac.Actor] = fmt.Sprintf("sharedwatch events list --payload-key actor --payload-value %s --since 1h --format jsonl", ac.Actor)
-	}
-	return d
 }
 
 const overviewCacheKey = "overview_v1_24h"

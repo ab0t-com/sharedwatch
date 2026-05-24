@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"sharedwatch/internal/app"
+	"sharedwatch/internal/hints"
 )
 
 // handleRoots implements the `roots` subcommand: prints the watched folders
@@ -31,15 +32,23 @@ func handleRoots(ctx context.Context, a *app.App, args []string) {
 		fatal(err)
 	}
 
+	// Smart hints (SW-AGENT-17). Same Context for both text and JSON.
+	hintCtx := hints.Context{
+		Profile: resolveHintsProfile(*asJSON),
+		Roots:   toHintsRoots(roots),
+	}
+
 	if *asJSON {
 		envelope := struct {
 			FormatVersion int            `json:"format_version"`
 			Mode          string         `json:"mode"`
 			Roots         []app.RootView `json:"roots"`
+			Next          []hints.Hint   `json:"next,omitempty"`
 		}{
 			FormatVersion: 1,
 			Mode:          rootsMode(a),
 			Roots:         roots,
+			Next:          hints.For("roots", hintCtx).Hints,
 		}
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
@@ -66,6 +75,7 @@ func handleRoots(ctx context.Context, a *app.App, args []string) {
 		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", label, r.Path, r.Pending, last)
 	}
 	_ = tw.Flush()
+	hints.RenderText(os.Stdout, hints.For("roots", hintCtx))
 }
 
 // collectRootsView returns a uniform list of watched folders regardless of

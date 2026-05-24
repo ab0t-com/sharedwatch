@@ -20,6 +20,7 @@ import (
 	"sharedwatch/internal/config"
 	"sharedwatch/internal/db"
 	"sharedwatch/internal/events"
+	"sharedwatch/internal/hints"
 	"sharedwatch/internal/output"
 )
 
@@ -53,6 +54,7 @@ func main() {
 	root.Var(&extraIncludes, "include", "include-only pattern (repeatable; empty = include all)")
 	hashFlag := root.String("hash", "", "enable content hashing: on|off (default off)")
 	producerOverride := root.String("producer", "", "override producer_id stamped on emitted events")
+	hintsFlag := root.String("hints", "", "next-step suggestions profile: default|agent|terse|off (env SHAREDWATCH_HINTS; auto-promotes to agent for --format json)")
 	var rootAttr attrFlags
 	bindAttrFlags(root, &rootAttr, "applied to every event emitted during this invocation")
 	showVersion := root.Bool("version", false, "print version and exit")
@@ -64,6 +66,7 @@ func main() {
 	if err := root.Parse(args); err != nil {
 		os.Exit(2)
 	}
+	hintsProfileFlag = *hintsFlag
 	if *showVersion {
 		fmt.Println("sharedwatch", Version)
 		return
@@ -235,6 +238,15 @@ func handleStatus(ctx context.Context, a *app.App, args []string) {
 			}
 			snap.Actors = actors
 		}
+		// Smart hints (SW-AGENT-17): suggest next steps based on state.
+		snap.Next = hints.For("status", hints.Context{
+			Profile:       resolveHintsProfile(true),
+			Pending:       snap.Pending,
+			Failed:        snap.Failed,
+			Digests:       snap.Digests,
+			UnreadDigests: snap.UnreadDigests,
+			Roots:         toHintsRoots(snap.Roots),
+		}).Hints
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(snap); err != nil {
@@ -247,6 +259,18 @@ func handleStatus(ctx context.Context, a *app.App, args []string) {
 		fatal(err)
 	}
 	fmt.Println(out)
+	// Build a status snapshot for hint generation in text mode too.
+	if snap, err := a.StatusSnapshot(ctx); err == nil {
+		set := hints.For("status", hints.Context{
+			Profile:       resolveHintsProfile(false),
+			Pending:       snap.Pending,
+			Failed:        snap.Failed,
+			Digests:       snap.Digests,
+			UnreadDigests: snap.UnreadDigests,
+			Roots:         toHintsRoots(snap.Roots),
+		})
+		hints.RenderText(os.Stdout, set)
+	}
 	if *showActors {
 		actors, err := a.ActorsView(ctx)
 		if err != nil {
@@ -360,6 +384,14 @@ func handleDigest(ctx context.Context, a *app.App, args []string) {
 				fmt.Printf("%s %s events=%d status=%s %s\n", d.ID, d.CreatedAt.Format(time.RFC3339), d.EventCount, d.Status, firstLine(d.Summary))
 			}
 		}
+		// Smart hints (SW-AGENT-17): suggest showing the newest few.
+		recent := make([]hints.DigestRef, 0, len(digests))
+		for _, d := range digests {
+			recent = append(recent, hints.DigestRef{ID: d.ID, EventCount: d.EventCount, Status: string(d.Status)})
+		}
+		hints.RenderText(os.Stdout, hints.For("digest list", hints.Context{
+			Profile: resolveHintsProfile(false), RecentDigests: recent,
+		}))
 	case "show":
 		if len(args) < 2 {
 			fatal(fmt.Errorf("usage: sharedwatch digest show <id>"))
@@ -372,6 +404,10 @@ func handleDigest(ctx context.Context, a *app.App, args []string) {
 		fmt.Printf("id=%s\ncreated_at=%s\nwindow=%s..%s\nmode=%s\nevents=%d\nstatus=%s\nsummary=\n%s\n",
 			d.ID, d.CreatedAt.Format(time.RFC3339), d.WindowStart.Format(time.RFC3339), d.WindowEnd.Format(time.RFC3339),
 			d.Mode, d.EventCount, d.Status, d.Summary)
+		// Smart hints (SW-AGENT-17): suggest archiving once acted on.
+		hints.RenderText(os.Stdout, hints.For("digest show", hints.Context{
+			Profile: resolveHintsProfile(false), ShownDigestID: d.ID,
+		}))
 	case "archive":
 		if len(args) < 2 {
 			fatal(fmt.Errorf("usage: sharedwatch digest archive <id>"))
@@ -554,11 +590,11 @@ func handleEventsStats(ctx context.Context, a *app.App, args []string) {
 				}
 			}
 		}
-		if len(stats.Drill) > 0 {
-			fmt.Println("  drill:")
-			for k, v := range stats.Drill {
-				fmt.Printf("    %s\n      → %s\n", k, v)
-			}
+		if len(stats.Next) > 0 {
+			hints.RenderText(os.Stdout, hints.HintSet{
+				Profile: resolveHintsProfile(false),
+				Hints:   stats.Next,
+			})
 		}
 	}
 }
@@ -1067,11 +1103,11 @@ func handleOverview(ctx context.Context, a *app.App, args []string) {
 				fmt.Printf("    %-32s %d\n", ac.Actor, ac.Count)
 			}
 		}
-		if len(ov.Drill) > 0 {
-			fmt.Println("  drill:")
-			for k, v := range ov.Drill {
-				fmt.Printf("    %s\n      → %s\n", k, v)
-			}
+		if len(ov.Next) > 0 {
+			hints.RenderText(os.Stdout, hints.HintSet{
+				Profile: resolveHintsProfile(false),
+				Hints:   ov.Next,
+			})
 		}
 	}
 }
@@ -1236,6 +1272,11 @@ func handleInit(a *app.App) {
 	// app.New already created WatchPath and the DB. Print a small
 	// confirmation so users know where data lives.
 	fmt.Printf("watch_path=%s\ndb_path=%s\ndata_dir=%s\n", a.Cfg.WatchPath, a.Cfg.DBPath, a.Cfg.DataDir)
+	// Smart hints (SW-AGENT-17): "...and now run me".
+	hints.RenderText(os.Stdout, hints.For("init", hints.Context{
+		Profile:   resolveHintsProfile(false),
+		WatchPath: a.Cfg.WatchPath,
+	}))
 }
 
 func buildLogger(format, level string) (*slog.Logger, error) {

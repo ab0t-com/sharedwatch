@@ -12,6 +12,7 @@ import (
 	"sharedwatch/internal/db"
 	"sharedwatch/internal/digest"
 	"sharedwatch/internal/events"
+	"sharedwatch/internal/hints"
 	"sharedwatch/internal/mode"
 	"sharedwatch/internal/reconcile"
 	"sharedwatch/internal/watcher"
@@ -106,6 +107,11 @@ type StatusSnapshot struct {
 	// non-empty). Single-root setups never emit this key — preserves the
 	// pre-SW-AGENT-3 JSON contract for legacy callers.
 	Roots []RootView `json:"roots,omitempty"`
+	// Next carries optional next-step suggestions emitted by the hints
+	// engine (SW-AGENT-17). Populated by the cmd layer when --hints is
+	// not 'off'. omitempty — JSON consumers that don't know the field can
+	// continue to ignore it.
+	Next []hints.Hint `json:"next,omitempty"`
 }
 
 // RootView is the status-time projection of one configured watch-root.
