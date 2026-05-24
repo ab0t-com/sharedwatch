@@ -91,12 +91,17 @@ sharedwatch config show
 #    the same DRY RUN plan as a real version; the 404 only fires on
 #    --apply. A clean dry-run is NOT proof the target is real.
 #
-# 4. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
+# 4. `lease list --all` shows EXPIRED leases (TTL ran out) but NOT
+#    RELEASED leases. Released = deleted; --all only surfaces ones
+#    that lived out their TTL. For a full audit of grant/release
+#    history, query the events journal directly.
+#
+# 5. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
 #    real file changes the watcher picks up, NOT on `test emit`. To
 #    exercise the lease path, write a file to the watched dir and let
 #    the watcher detect it; `test emit` skips the lease check.
 #
-# 5. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
+# 6. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
 #    Older docs may show `acquire`; the binary only accepts grant/release/
 #    renew/list.
 

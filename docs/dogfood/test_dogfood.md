@@ -118,6 +118,9 @@ safe_clear_files && $SW reconcile now    # baseline before next scenario
 | 27 | `sharedwatch update` end-to-end (v0.0.8 dogfood) | Self-update lifecycle: dry-run, version pin, same-version, missing |
 | 28 | `events cursor` management lifecycle (v0.0.8 dogfood) | All 5 cursor subcommands; encode/decode round-trip |
 | 29 | Empty-journal grace (v0.0.8 dogfood) | Every command on a fresh init with zero events |
+| 30 | Mode active TTL lifecycle (v0.0.8 dogfood) | Active→passive transitions, TTL expiry |
+| 31 | Full lease lifecycle (v0.0.8 dogfood) | grant → list → renew → release; --all filter |
+| 32 | Config search precedence end-to-end (v0.0.8 dogfood) | explicit &gt; project-local &gt; XDG |
 
 ---
 
@@ -1182,3 +1185,141 @@ $SW --data-dir "$DOG" stop
 **Pass criteria:** every command exits 0 (except (f) which is an intentional bad-flag); no crash; outputs are friendly + structured-correct.
 
 **Recorded run:** see this scenario's worklog summary below.
+
+---
+
+## 30 — Mode active TTL lifecycle (v0.0.8 dogfood)
+
+**Goal:** verify `mode active --ttl <d>` correctly sets the active window, that `status` reflects it, and that `mode passive` flips back cleanly. Active mode is documented but the TTL accounting has never been dogfood-tested.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-30
+rm -rf "$DOG" && mkdir -p "$DOG"
+$SW --data-dir "$DOG" init >/dev/null
+```
+
+**Actions + expected:**
+
+```bash
+# (a) Default state is passive.
+$SW --data-dir "$DOG" status | grep -E 'mode|active_'
+
+# (b) Switch to active with a 1-min TTL.
+$SW --data-dir "$DOG" mode active --ttl 1m
+$SW --data-dir "$DOG" status | grep -E 'mode|active_'
+# Expected: mode=active, active_until=<future>, active_expires_in≈1m
+
+# (c) Status --json carries the same fields.
+$SW --data-dir "$DOG" status --json | jq '{mode, active_until, active_expires_in}'
+# Expected: mode="active", active_until populated, active_expires_in present
+
+# (d) Force passive.
+$SW --data-dir "$DOG" mode passive
+$SW --data-dir "$DOG" status | grep -E 'mode|active_'
+# Expected: mode=passive, active_until=-
+
+# (e) Re-activate with a TINY ttl, sleep past it, status should show expired.
+$SW --data-dir "$DOG" mode active --ttl 3s
+sleep 4
+$SW --data-dir "$DOG" status | grep -E 'mode|active_'
+# Expected: mode flips back to passive (or active_expires_in is "-" / negative)
+```
+
+**What this exercises:** `internal/mode/mode.go` TTL accounting; status JSON envelope's mode fields; the `EffectiveMode(now)` computation.
+
+**Pass criteria:** (b) active with non-zero expires_in; (c) JSON matches text; (d) clean passive flip; (e) auto-expiry recognized in status.
+
+**Recorded run:** see worklog summary below.
+
+---
+
+## 31 — Full lease lifecycle (grant → list → renew → release) (v0.0.8 dogfood)
+
+**Goal:** exercise the full `lease` surface (4 verbs) end-to-end and verify each step's effect via `lease list`. Lease coordination has been touched in scenario 24 (warning behaviour) but the verb lifecycle itself has not been dogfooded.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-31
+rm -rf "$DOG" && mkdir -p "$DOG"
+$SW --data-dir "$DOG" init >/dev/null
+```
+
+**Actions + expected:**
+
+```bash
+# (a) list on fresh DB → no leases
+$SW --data-dir "$DOG" lease list
+
+# (b) grant a lease, capture the lease_id
+GRANTED=$($SW --data-dir "$DOG" lease grant 'auth/**' --actor claude-a --ttl 5m)
+echo "$GRANTED"
+LID=$(echo "$GRANTED" | jq -r '.lease_id')
+echo "captured LID=$LID"
+
+# (c) list → lease present
+$SW --data-dir "$DOG" lease list
+
+# (d) renew with a longer TTL
+$SW --data-dir "$DOG" lease renew "$LID" --ttl 10m
+$SW --data-dir "$DOG" lease list
+# Expected: same lease, later expires_at
+
+# (e) release
+$SW --data-dir "$DOG" lease release "$LID"
+$SW --data-dir "$DOG" lease list
+# Expected: no active leases
+
+# (f) --all flag shows expired/released too
+$SW --data-dir "$DOG" lease list --all
+```
+
+**What this exercises:** `internal/db/leases.go` CRUD; lease metadata; renew-extend semantics; --all filter.
+
+**Pass criteria:** every verb works; renew extends; release removes from active list; --all surfaces released entries.
+
+**Recorded run:** see worklog summary below.
+
+---
+
+## 32 — Config-file search precedence end-to-end (v0.0.8 dogfood)
+
+**Goal:** verify SW-AGENT-18's documented config-file search order in a realistic 3-file setup. Drop a config at the XDG location, another at `./config.yaml`, and pass a third via `--config`. Verify each layer's actor value wins as the higher-precedence layer is removed.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-32
+rm -rf "$DOG" && mkdir -p "$DOG" "$DOG/xdg/sharedwatch" "$DOG/project"
+echo "actor: from-xdg"      > "$DOG/xdg/sharedwatch/config.yaml"
+echo "actor: from-project"  > "$DOG/project/config.yaml"
+echo "actor: from-explicit" > "$DOG/explicit.yaml"
+cd "$DOG/project"
+```
+
+**Actions + expected:**
+
+```bash
+# (a) --config explicit wins over both
+$SW --data-dir "$DOG/data" --config "$DOG/explicit.yaml" config show 2>&1 | grep -E '^\s+actor:'
+# Expected: actor: from-explicit
+
+# (b) No --config; ./config.yaml present → project wins over XDG
+XDG_CONFIG_HOME="$DOG/xdg" $SW --data-dir "$DOG/data" config show 2>&1 | grep -E '^\s+actor:'
+# Expected: actor: from-project
+
+# (c) No --config; no ./config.yaml; XDG only
+mv "$DOG/project/config.yaml" "$DOG/project/config.yaml.disabled"
+XDG_CONFIG_HOME="$DOG/xdg" $SW --data-dir "$DOG/data" config show 2>&1 | grep -E '^\s+actor:'
+# Expected: actor: from-xdg
+mv "$DOG/project/config.yaml.disabled" "$DOG/project/config.yaml"
+
+# (d) The CONFIG FILES SEARCHED block in (b) should list both paths,
+#     with the project-local marked loaded and the XDG marked shadowed.
+XDG_CONFIG_HOME="$DOG/xdg" $SW --data-dir "$DOG/data" config show | sed -n '/CONFIG FILES SEARCHED/,/RESOLUTION ORDER/p'
+```
+
+**What this exercises:** `internal/config/file.go` `SearchConfig()` precedence; `config show`'s search-trail rendering (SW-AGENT-18).
+
+**Pass criteria:** (a) explicit > everything; (b) project-local > XDG; (c) XDG fallback works; (d) search trail correctly marks loaded vs shadowed.
+
+**Recorded run:** see worklog summary below.

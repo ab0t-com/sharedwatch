@@ -1148,7 +1148,7 @@ func handleLease(ctx context.Context, a *app.App, args []string) {
 		fs := flag.NewFlagSet("lease list", flag.ExitOnError)
 		actor := fs.String("actor", "", "filter by actor")
 		pathGlob := fs.String("path-glob", "", "filter by path_glob")
-		all := fs.Bool("all", false, "include expired leases")
+		all := fs.Bool("all", false, "include expired leases (note: released leases are deleted, not retained — `--all` only surfaces leases that lived out their TTL)")
 		asJSON := fs.Bool("json", false, "emit JSON instead of text")
 		_ = fs.Parse(args[1:])
 		rows, err := a.Store.ListLeases(ctx, db.LeaseFilter{ActorID: *actor, PathGlob: *pathGlob, IncludeExpired: *all})

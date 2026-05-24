@@ -4,6 +4,18 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — dogfood scenarios 30/31/32 (v0.0.8 dogfood)
+- 30: mode active TTL lifecycle (active→passive transitions, TTL expiry).
+- 31: full lease lifecycle (grant → list → renew → release; --all filter).
+- 32: config search precedence end-to-end (--config > project-local > XDG).
+- Run end-to-end against deployed v0.0.8. Net: 0 code bugs, 1 documented behaviour (below), 1 help-text clarification (below).
+
+### Documented — `lease list --all` shows expired but NOT released leases (dogfood scenario 31)
+- Surfaced by scenario 31: `sharedwatch lease release <id>` deletes the lease outright; subsequent `lease list --all` returns "no leases" because `--all` only surfaces leases retained in the table (i.e., those that lived out their TTL without being released).
+- The flag's help text said "include expired leases" — technically accurate but easy to misread as "everything I ever did".
+- Help text clarified to: `include expired leases (note: released leases are deleted, not retained — \`--all\` only surfaces leases that lived out their TTL)`.
+- Documented as a known gotcha in `agent-system-prompt-20260522.md` and `Skills/sharedwatch-client/SKILL.md`. For a full audit trail of grant/release, query the `events` journal directly.
+
 ### Added — dogfood scenarios 27/28/29 (v0.0.8 dogfood)
 - Scenarios 27 (update lifecycle), 28 (cursor management surface), 29 (empty-journal grace) added to `docs/dogfood/test_dogfood.md`. Each run end-to-end against the deployed v0.0.8 binary.
 - **Net findings:** 1 code bug (none), 1 documented behaviour (see below), 1 scenario-text fix (cursor encode syntax — my own scenario was wrong, fixed). v0.0.8 is solid across these three axes (update lifecycle + cursor management + empty-state grace).
