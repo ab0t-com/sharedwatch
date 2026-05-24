@@ -601,7 +601,7 @@ func handleEventsStats(ctx context.Context, a *app.App, args []string) {
 
 func handleEventsList(ctx context.Context, a *app.App, args []string) {
 	fs := flag.NewFlagSet("events list", flag.ExitOnError)
-	since := fs.String("since", "", "RFC3339 lower bound on created_at (inclusive)")
+	since := fs.String("since", "", "RFC3339 timestamp or duration (e.g. 24h, 30m) lower bound on created_at; defaults to 24h ago when no cursor is set")
 	until := fs.String("until", "", "RFC3339 upper bound on created_at (exclusive)")
 	pathGlob := fs.String("path-glob", "", "filter rel_path by glob (supports `**`)")
 	limit := fs.Int("limit", 100, "max rows (0 = no cap)")
@@ -637,6 +637,20 @@ func handleEventsList(ctx context.Context, a *app.App, args []string) {
 	// monotonically. Otherwise the user's --order preference wins.
 	cursorMode := *sinceCursor != "" || *cursorName != ""
 	orderAsc := strings.EqualFold(*order, "asc") || cursorMode
+
+	// Default --since to 24h ago when the caller didn't specify any time bound
+	// AND isn't using cursor mode. A bare `events list` on a busy journal
+	// previously returned every row since the dawn of time; defaulting to
+	// last-24h matches `overview --since 24h` and `events stats --since 24h`,
+	// and dramatically improves first-time UX (especially for agents reading
+	// JSON output). Override either via `--since <t>` or by passing
+	// `--since 0` for the legacy "everything" behaviour.
+	if *since == "" && !cursorMode {
+		*since = "24h"
+	}
+	if *since == "0" {
+		*since = "" // explicit opt-out: no lower bound
+	}
 
 	filter := db.EventFilter{
 		Types:        []string(types),

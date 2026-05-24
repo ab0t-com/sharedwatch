@@ -78,12 +78,23 @@ func Default() Config {
 		ActiveTTL:         30 * time.Minute,
 		ReconcileInterval: 30 * time.Minute,
 		MaxBatchSize:      100,
-		IgnorePatterns:    []string{".git", ".DS_Store", "*.tmp", "*.swp"},
-		IncludePatterns:   nil,
-		RetentionDays:     30,
-		HashEnabled:       false,
-		HashMaxSize:       1 << 20, // 1 MB
-		ProducerID:        fmt.Sprintf("%s:%d", host, os.Getpid()),
-		ActorTTL:          5 * time.Minute,
+		// Default ignore patterns. Path-segment-matched (so `.git` excludes
+		// `.git/objects/abc` as well as a literal file named `.git`). The
+		// universally-noisy dev artifacts are included so the journal isn't
+		// drowned in build output on a typical developer's machine. Users
+		// who *want* any of these tracked override via `ignore_patterns:`
+		// in config.yaml.
+		IgnorePatterns: []string{
+			".git", ".DS_Store", "*.tmp", "*.swp",
+			"node_modules", "__pycache__", ".cache",
+			".venv", "venv", "target", "dist", "build",
+			"*.log",
+		},
+		IncludePatterns: nil,
+		RetentionDays:   30,
+		HashEnabled:     false,
+		HashMaxSize:     1 << 20, // 1 MB
+		ProducerID:      fmt.Sprintf("%s:%d", host, os.Getpid()),
+		ActorTTL:        5 * time.Minute,
 	}
 }

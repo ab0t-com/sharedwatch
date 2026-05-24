@@ -26,6 +26,8 @@ Read-only thinking artifacts. Some become tickets; some stay as the *why* behind
 | [`design/design-questions-20260523.md`](design/design-questions-20260523.md) | 2026-05-23 | Living Q&A log. Q1: is this a git replacement? Q2: what's the point of knowing a file changed without knowing what? Q3: should we run `git add . && git commit` on every change? | Living |
 | [`design/content-storage-evaluation-20260523.md`](design/content-storage-evaluation-20260523.md) | 2026-05-23 | 440-line evaluation of three content-storage options (diff-only vs blob-store vs hybrid) and three implementation paths (git-format-compat vs go-git lib vs sharedwatch-owned). Drives the team decision before SW-AGENT-16 implementation. | Awaiting team decision |
 | [`design/future-features-20260523.md`](design/future-features-20260523.md) | 2026-05-23 | 15 predicted next-features ranked by usage × need × design-fit, framed as complaints an agent will make in six months. | Predictive |
+| [`design/hooks-discussion-20260524.md`](design/hooks-discussion-20260524.md) | 2026-05-24 | Discussion: does sharedwatch need a hooks system? What shape fits the calm/pull architecture? Recommendation: build `--on-digest <command>` only, when a real user asks for it. | Discussion → on-demand |
+| [`design/defaults-audit-20260524.md`](design/defaults-audit-20260524.md) | 2026-05-24 | Audit of every CLI flag against "does the agent repeat this every time?". Phase 1 (the two known gaps) shipped in v0.0.5; Phase 2 (env-var-driven agent identity) + Phase 3 (cursor auto-default) deferred for review. | Action list |
 
 ---
 

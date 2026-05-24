@@ -4,6 +4,21 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Changed — `events list --since` defaults to 24h when no cursor is set
+- Bare `sharedwatch events list` previously returned the entire journal from the dawn of time. Now defaults `--since` to `24h` when neither `--since`, `--since-cursor`, nor `--cursor-name` is set. Matches `overview --since 24h` and `events stats --since 24h`.
+- Override: pass `--since <RFC3339>` or a duration like `--since 1h` for any window; pass `--since 0` for the legacy "no lower bound" behaviour (returns everything).
+- Driven by [`docs/design/defaults-audit-20260524.md`](../docs/design/defaults-audit-20260524.md) §3 Gap A. Phase-1 of the wider defaults work.
+
+### Changed — default `ignore_patterns` extended with universally-noisy dev dirs
+- Previously: `.git, .DS_Store, *.tmp, *.swp`.
+- Now also includes: `node_modules`, `__pycache__`, `.cache`, `.venv`, `venv`, `target`, `dist`, `build`, `*.log`.
+- Path-segment matched, so `node_modules/foo/bar.js` is excluded by the `node_modules` entry. Users who want any of these tracked override via `ignore_patterns:` in `config.yaml`.
+- Driven by [`docs/design/defaults-audit-20260524.md`](../docs/design/defaults-audit-20260524.md) §3 Gap B. Phase-1 of the wider defaults work.
+
+### Added — design discussions: hooks system + defaults audit
+- [`docs/design/hooks-discussion-20260524.md`](../docs/design/hooks-discussion-20260524.md) — full discussion of whether sharedwatch needs a hooks system, what shape would fit the calm/pull architecture, and the recommendation (only `--on-digest <command>`, when a real user asks for it). 182 lines.
+- [`docs/design/defaults-audit-20260524.md`](../docs/design/defaults-audit-20260524.md) — audit of every CLI flag against the "does the agent have to repeat this every time?" question. Lists Phase-1 (the two fixes above), Phase-2 (agent identity defaults via env vars), Phase-3 (cursor-name auto-default). 176 lines.
+
 ### Added — smart hints / next-step suggestions (SW-AGENT-17)
 - New `internal/hints` package: a small, profile-driven, modular engine for emitting "what to run next" suggestions alongside CLI output. Zero imports from other sharedwatch packages — designed to be lifted into a standalone module later (`git mv internal/hints/ <newmod>/hints/` is the extract recipe).
 - Four built-in profiles: `default` (≤4 hints, human-facing, with reasons), `agent` (≤8 hints, designed for AI consumers reading JSON), `terse` (1 hint, no reason), `off` (none).
