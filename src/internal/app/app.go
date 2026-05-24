@@ -281,14 +281,24 @@ func (a *App) TestEmit(ctx context.Context, relPath string) (events.Event, error
 }
 
 func (a *App) TestEmitWithPayload(ctx context.Context, relPath, payloadJSON string) (events.Event, error) {
-	e, err := a.Watcher.EmitSyntheticWithPayload(ctx, relPath, events.TypeModified, events.SourceTest, payloadJSON)
+	e, _, err := a.TestEmitWithPayloadResult(ctx, relPath, payloadJSON)
+	return e, err
+}
+
+// TestEmitWithPayloadResult is the result-returning variant. coalescedIntoID
+// is the prior event's id if the emit coalesced into an existing pending
+// event in the (rel_path, watch_root, actor) coalesce window; empty if a
+// fresh row was inserted. The CLI `test emit` handler uses this to print
+// "coalesced into <prior_id>" instead of returning a phantom id.
+func (a *App) TestEmitWithPayloadResult(ctx context.Context, relPath, payloadJSON string) (events.Event, string, error) {
+	e, coalescedInto, err := a.Watcher.EmitSyntheticWithPayloadResult(ctx, relPath, events.TypeModified, events.SourceTest, payloadJSON)
 	if err != nil {
-		return events.Event{}, err
+		return events.Event{}, "", err
 	}
 	rt, _ := a.Store.GetRuntime(ctx)
 	rt.LastEventAt = time.Now().UTC()
 	_ = a.Store.UpsertRuntime(ctx, rt)
-	return e, nil
+	return e, coalescedInto, nil
 }
 
 func (a *App) ListDigests(ctx context.Context, limit int) ([]digest.Digest, error) {

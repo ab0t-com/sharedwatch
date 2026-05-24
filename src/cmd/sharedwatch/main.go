@@ -525,11 +525,20 @@ func handleTest(ctx context.Context, a *app.App, args []string, rootAttr attrFla
 	if finalPayload == "" && !merged.isEmpty() {
 		finalPayload = events.BuildPayloadV1(merged.toPayload())
 	}
-	e, err := a.TestEmitWithPayload(ctx, rel, finalPayload)
+	e, coalescedInto, err := a.TestEmitWithPayloadResult(ctx, rel, finalPayload)
 	if err != nil {
 		fatal(err)
 	}
-	fmt.Printf("emitted %s %s\n", e.ID, e.RelPath)
+	if coalescedInto != "" {
+		// SW-AGENT-23: the new event coalesced into a prior pending event
+		// in the (rel_path, watch_root, actor) window. The id returned in
+		// `e.ID` was generated but the row was NOT inserted — the prior
+		// event was updated in place. Surface the actual persisted id so
+		// agents can act on a real row.
+		fmt.Printf("coalesced into %s %s\n", coalescedInto, e.RelPath)
+	} else {
+		fmt.Printf("emitted %s %s\n", e.ID, e.RelPath)
+	}
 }
 
 func handleEvents(ctx context.Context, a *app.App, args []string) {
@@ -1045,10 +1054,16 @@ func handleIntent(ctx context.Context, a *app.App, args []string) {
 			fatal(err)
 		}
 		if *asJSON {
+			// SW-AGENT-23: emit JSONL (one object per line) for consistency with
+			// `events list --format jsonl` and `lease list --json`. Previously
+			// emitted a bare JSON array, which forced jq users to special-case
+			// intent (and produced a bare `null` for empty results). Empty
+			// result is now no output (matching events list).
 			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			if err := enc.Encode(rows); err != nil {
-				fatal(err)
+			for _, r := range rows {
+				if err := enc.Encode(r); err != nil {
+					fatal(err)
+				}
 			}
 			return
 		}
@@ -1166,9 +1181,15 @@ func handleLease(ctx context.Context, a *app.App, args []string) {
 			fatal(err)
 		}
 		if *asJSON {
+			// SW-AGENT-23: emit JSONL (one object per line) for consistency with
+			// `events list --format jsonl` and `intent list --json`. Was a bare
+			// JSON array; now one object per line, empty = no output.
 			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			_ = enc.Encode(rows)
+			for _, r := range rows {
+				if err := enc.Encode(r); err != nil {
+					fatal(err)
+				}
+			}
 			return
 		}
 		if len(rows) == 0 {

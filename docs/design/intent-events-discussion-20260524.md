@@ -6,13 +6,14 @@ This doc captures the open questions, sketches options, and proposes a recommend
 
 ---
 
-## Q1 — Should `intent declare` / `intent revoke` emit events?
+## Q1 — Should the coordination surface (lease + intent) emit events?
 
-### Observed
+### Observed (corrected 2026-05-24 after empirical verification)
 
-- `lease grant` / `lease release` emit `lease.granted` / `lease.released` events into the journal.
-- `intent declare` / `intent revoke` do **not** emit any events.
-- Result: a peer agent watching the journal (`events list --cursor-name ...`) sees lease activity but is blind to intent activity. To know "what is anyone planning right now?" they must poll `intent list --json`, which is a fundamentally different access pattern from the rest of the coordination surface.
+- **NEITHER** `lease grant`/`lease release` **NOR** `intent declare`/`intent revoke` emit events to the journal.
+- My initial framing claimed leases emit events for parity with intents — that was wrong. Empirical check (`COUNT(*) FROM events` before/after lease grant + release on an empty DB): zero events. The lease grant handler at `src/cmd/sharedwatch/main.go:1084` only calls `InsertLease`; no `InsertEvent`.
+- The events journal is for **FILE events only** today (`file.created/.modified/.deleted/.renamed`, plus `reconcile.*`).
+- Result: there is currently **no way to subscribe to coordination signals** via the journal. A peer agent that wants to know "who declared what intent recently?" or "who acquired what lease?" must poll the dedicated `intent list` / `lease list` endpoints — fundamentally different from the cursor-based stream model used for file events.
 
 ### Why this matters
 
@@ -20,15 +21,17 @@ The whole point of intents is *coordination signalling before the work happens*.
 
 ### Options
 
-**(A) Emit `intent.declared` / `intent.revoked` events.** Symmetric with leases. One row per intent declare and one per revoke. Payload includes actor, path_glob, task, intent text, ttl.
+**(A) Emit events for the full coordination surface** — add `lease.granted`, `lease.released`, `lease.renewed`, `intent.declared`, `intent.revoked` as new event types. Single, consistent design: every coord-surface change appears in the journal as well as in its dedicated table. Cursor-streaming agents now get coordination visibility for free. ~80–100 LOC.
 
-**(B) Status quo + document.** Tell agents "intents are poll-only; leases are stream-able." Cheaper but locks in an asymmetry that will keep surfacing in agent confusion.
+**(B) Status quo + document clearly.** Cheap. Locks in poll-only access for the coordination surface, but matches how the system actually behaves today.
 
-**(C) Hybrid — emit only on declare, not revoke.** Argument: a revoked intent is a non-event (it was withdrawn). Counter-argument: peer agents that already saw the declare need to know it's gone, exactly like a released lease.
+**(C) Emit only on declare/grant (not revoke/release).** Halfway. Argument: revoke/release are "withdrawals" that don't need a stream-side signal. Counter-argument: peer agents subscribed to the cursor stream need to know when a lease frees up or an intent is withdrawn, otherwise they have stale state.
+
+**(D) Build a separate "coord-events" stream** — a second journal-like view that aggregates lease+intent state changes without polluting the file-events stream. More machinery, but cleaner separation. Probably overengineered for current scale.
 
 ### Recommendation
 
-**(A) Emit both.** Symmetry with leases is the right invariant: every coordination-surface change appears in the journal. Implementation is ~30 LOC (add two `events.Emit` calls in the existing declare/revoke handlers, payload mirrors the lease event shape). One-shot ticket worth filing — call it **SW-AGENT-23 — intent.* events parity with lease.* events**.
+**(A), or defer with (B) for now.** This is a bigger question than I initially framed it — adding coordination events touches multiple subcommands, cursor consumers, hint providers, and JSON envelopes. It's a real design call that probably warrants its own ticket (~3–5 hours of work + dogfood) rather than being bundled with the small intent fixes below. **Recommended split**: defer Q1 to its own ticket (call it SW-AGENT-24 — coord-events stream), ship Q2 + Q3 now under SW-AGENT-23 (intent surface fixes). The user can decide whether Q1 is worth the larger investment.
 
 ---
 
@@ -98,16 +101,24 @@ Bundle with Q1/Q2 — these are all small enough to land in one v0.0.9-class rel
 
 ---
 
-## Net recommendation
+## Net recommendation (revised after Q1 reframing)
 
-One combined ticket — SW-AGENT-23 — that:
-1. Emits `intent.declared` / `intent.revoked` events (Q1-A)
-2. Changes `test emit` to print `coalesced into <prior_id>` when the coalesce path triggers (Q2-B)
-3. Switches `intent list --json` to JSONL (Q3-A)
+**Split into two tickets:**
 
-Each is small (sub-50 LOC), all three share testing infrastructure, and shipping them together avoids re-doing the dogfood scenarios for each. Bumps to v0.0.9; CHANGELOG entry covers all three.
+- **SW-AGENT-23 — intent surface fixes (small, ship now in v0.0.9):**
+  - Q2: change `test emit` to print `coalesced into <prior_id>` when the coalesce path triggers
+  - Q3: switch `intent list --json` to JSONL (matching `events list`/`lease list`)
+  - Both are sub-50 LOC, no design risk, and close the gotchas surfaced by dogfood scenarios 33/34.
 
-If the user prefers minimum-viable: only ship Q1 (intent events). Q2/Q3 stay documented as gotchas and ship later when an actual user hits them.
+- **SW-AGENT-24 — coord-events stream (larger, defer):**
+  - Q1: decide whether `lease.granted/released/renewed` + `intent.declared/revoked` should land in the events journal so agents can subscribe via cursor.
+  - This is a real design question that affects multiple subcommands, cursor consumers, hint providers, and the agent-facing skill docs. It deserves its own deliberation and isn't ready to ship without thinking through:
+    - Should coord events live in the same `events` table or a sibling table?
+    - Do they participate in coalesce? (Probably no — coord events are distinct user actions.)
+    - Do cursors filter them by default? (Backwards compat: probably yes — opt-in.)
+  - File a separate discussion + ticket; do not bundle.
+
+If the user wants minimum-viable: skip Q1 entirely; ship Q2+Q3 as SW-AGENT-23/v0.0.9; revisit coord-events only if an actual user asks.
 
 ---
 

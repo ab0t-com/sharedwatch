@@ -20,6 +20,7 @@ import (
 type Adapter interface {
 	Close() error
 	InsertOrCoalesceEvent(ctx context.Context, e events.Event, window time.Duration) error
+	InsertOrCoalesceEventResult(ctx context.Context, e events.Event, window time.Duration) (coalescedIntoID string, err error)
 	GetRuntime(ctx context.Context) (mode.Runtime, error)
 	UpsertRuntime(ctx context.Context, r mode.Runtime) error
 	GetRuntimeJSON(ctx context.Context, key string) (string, bool, error)

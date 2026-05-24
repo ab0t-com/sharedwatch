@@ -68,8 +68,18 @@ func (s Service) EmitSynthetic(ctx context.Context, relPath string, typ events.T
 // root's label (a sensible default for testing). A future `test emit --root
 // <label>` flag will allow explicit targeting.
 func (s Service) EmitSyntheticWithPayload(ctx context.Context, relPath string, typ events.Type, source events.Source, payloadJSON string) (events.Event, error) {
+	e, _, err := s.EmitSyntheticWithPayloadResult(ctx, relPath, typ, source, payloadJSON)
+	return e, err
+}
+
+// EmitSyntheticWithPayloadResult behaves like EmitSyntheticWithPayload but
+// additionally returns the id of any prior event the new emit coalesced
+// into (empty if a fresh row was inserted). Test/CLI callers use this so
+// they can surface "coalesced into <id>" instead of advertising a phantom
+// id for a row that never landed.
+func (s Service) EmitSyntheticWithPayloadResult(ctx context.Context, relPath string, typ events.Type, source events.Source, payloadJSON string) (events.Event, string, error) {
 	if err := validateRelPath(relPath); err != nil {
-		return events.Event{}, err
+		return events.Event{}, "", err
 	}
 	roots := s.effectiveRoots()
 	root := roots[0]
@@ -93,10 +103,11 @@ func (s Service) EmitSyntheticWithPayload(ctx context.Context, relPath string, t
 		ProducerID:  s.ProducerID,
 		WatchRoot:   root.Label,
 	}
-	if err := s.Store.InsertOrCoalesceEvent(ctx, e, s.CoalesceWindow); err != nil {
-		return events.Event{}, err
+	coalescedInto, err := s.Store.InsertOrCoalesceEventResult(ctx, e, s.CoalesceWindow)
+	if err != nil {
+		return events.Event{}, "", err
 	}
-	return e, nil
+	return e, coalescedInto, nil
 }
 
 // ScanAndQueue snapshots every configured root, diffs against the prior

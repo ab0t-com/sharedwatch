@@ -4,6 +4,21 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+## [v0.0.9] — 2026-05-24 — SW-AGENT-23: intent surface parity
+
+### Fixed
+- **`test emit` is now coalesce-aware** (Q2 from `intent-events-discussion-20260524.md`). When an emit coalesces into a prior pending event in the `(rel_path, watch_root, actor)` window, the CLI now prints `coalesced into <prior_id> <relpath>` instead of `emitted <phantom_id> <relpath>`. Eliminates the phantom-id problem surfaced by dogfood scenario 34 (the id was being advertised but the row was never persisted). Cross-actor coalesce semantics from SW-AGENT-11 unchanged.
+- **`intent list --json` is now JSONL** (Q3). One object per line, empty = no output. Matches `events list --format jsonl` and `lease list --json` (also fixed to JSONL in this release). Previously a bare JSON array (and bare `null` for empty), which forced jq users to special-case intent.
+- **`lease list --json` is now JSONL** (drive-by — same shape inconsistency as `intent list --json`). One object per line, empty = no output.
+
+### Implementation
+- New methods threaded through to surface the coalesce result: `db.Store.InsertOrCoalesceEventResult`, `watcher.Service.EmitSyntheticWithPayloadResult`, `app.App.TestEmitWithPayloadResult`. Existing single-error-return methods wrap the new ones; zero behaviour change for non-test callers (reconcile, watcher production path).
+- `adapter.Adapter` interface gains `InsertOrCoalesceEventResult` alongside the existing `InsertOrCoalesceEvent`.
+
+### Documented (corrections)
+- **Critical correction to prior gotcha**: empirical verification showed `lease grant`/`lease release` do **not** emit events to the journal (neither do `intent declare`/`intent revoke`). The events journal is for FILE events only. Prior CHANGELOG and gotcha docs claimed lease emits events; corrected in `docs/agent/agent-system-prompt-20260522.md` and `Skills/sharedwatch-client/SKILL.md`. Agents that want to track coordination lifecycle should poll `lease list --json` / `intent list --json` directly.
+- Q1 (coordination-events stream) re-scoped: my initial framing assumed lease emitted events for parity; it doesn't. Now correctly framed as "should the coord surface emit events?" — bigger design question deferred to **SW-AGENT-24 — coord-events stream** (see updated `docs/design/intent-events-discussion-20260524.md`).
+
 ### Added — dogfood scenarios 33/34/35 (v0.0.8 dogfood, intent/coalesce/filter axis)
 - 33: full intent lifecycle (declare → list → revoke; text/JSON; --all).
 - 34: cross-actor coalesce regression check (SW-AGENT-11).

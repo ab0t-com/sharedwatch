@@ -95,10 +95,11 @@ sharedwatch config show
 #    filter, not a soft-delete filter. `lease list --all` and
 #    `intent list --all` both surface only entries that lived out
 #    their TTL; explicitly released leases and revoked intents are
-#    HARD-DELETED, not retained. For a full audit trail of grant/
-#    release or declare/revoke, query the events journal (note:
-#    intent declare/revoke currently does NOT emit events — track
-#    via `intent list --json` polling, or file a request).
+#    HARD-DELETED, not retained. NEITHER lease nor intent lifecycle
+#    emits events to the journal today (verified empirically) —
+#    the events journal is for FILE events only. Track coord
+#    lifecycle by polling `lease list --json` / `intent list --json`
+#    directly.
 #
 # 5. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
 #    real file changes the watcher picks up, NOT on `test emit`. To

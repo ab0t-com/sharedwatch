@@ -318,6 +318,18 @@ func (s *Store) UpdateEvent(ctx context.Context, e events.Event) error {
 }
 
 func (s *Store) InsertOrCoalesceEvent(ctx context.Context, e events.Event, window time.Duration) error {
+	_, err := s.InsertOrCoalesceEventResult(ctx, e, window)
+	return err
+}
+
+// InsertOrCoalesceEventResult is the result-returning variant of
+// InsertOrCoalesceEvent. When the new event coalesces into a prior pending
+// event, the returned coalescedIntoID is the prior event's id; when a new
+// row is inserted, the returned id is "". Callers that need to surface the
+// difference (e.g. `test emit` so the CLI can print "coalesced into <id>"
+// rather than a phantom new id) should call this method; everyone else can
+// use the simpler InsertOrCoalesceEvent wrapper.
+func (s *Store) InsertOrCoalesceEventResult(ctx context.Context, e events.Event, window time.Duration) (coalescedIntoID string, err error) {
 	// Actor- and root-aware coalesce: only merge with a prior pending event on
 	// the same path inside the same watch_root with the same actor. Two
 	// agents editing the same file inside the window remain distinct
@@ -327,13 +339,16 @@ func (s *Store) InsertOrCoalesceEvent(ctx context.Context, e events.Event, windo
 	actor := events.ExtractActor(e.PayloadJSON)
 	existing, ok, err := s.FindRecentPendingByRelPathAndActor(ctx, e.RelPath, actor, e.WatchRoot, e.Timestamp.Add(-window))
 	if err != nil {
-		return err
+		return "", err
 	}
 	if ok && events.ShouldCoalesce(existing, e, window) {
 		merged := events.Coalesce(existing, e)
-		return s.UpdateEvent(ctx, merged)
+		if err := s.UpdateEvent(ctx, merged); err != nil {
+			return "", err
+		}
+		return existing.ID, nil
 	}
-	return s.InsertEvent(ctx, e)
+	return "", s.InsertEvent(ctx, e)
 }
 
 func (s *Store) ClaimPendingEvents(ctx context.Context, limit int) ([]events.Event, error) {
