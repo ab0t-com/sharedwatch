@@ -86,6 +86,9 @@ func NewWithLogger(ctx context.Context, cfg config.Config, logger *slog.Logger) 
 			ProducerID:    cfg.ProducerID,
 			PayloadJSON:   cfg.PayloadJSON,
 			ActorTTL:      cfg.ActorTTL,
+			// SW-AGENT-29 Phase 5: enables hook-sidecar pruning in
+			// the reconcile retention pass.
+			DataDir: cfg.DataDir,
 		},
 		Logger: logger,
 	}, nil

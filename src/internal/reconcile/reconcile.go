@@ -3,12 +3,14 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"sharedwatch/internal/catalog"
 	"sharedwatch/internal/config"
 	"sharedwatch/internal/db"
 	"sharedwatch/internal/events"
+	"sharedwatch/internal/hooks"
 	"sharedwatch/internal/mode"
 	"sharedwatch/internal/watcher"
 )
@@ -36,6 +38,11 @@ type Service struct {
 	// ActorTTL drives the per-pass actor-registry prune. Stale rows past
 	// 2× ActorTTL are deleted. Zero disables the prune (kept for tests).
 	ActorTTL time.Duration
+	// DataDir is the umbrella data directory; used to locate
+	// <DataDir>/hooks/ for sidecar-file pruning during the retention
+	// pass. Empty disables sidecar pruning (kept for tests).
+	// SW-AGENT-29 Phase 5.
+	DataDir string
 }
 
 func (s Service) effectiveRoots() []config.WatchRoot {
@@ -151,6 +158,21 @@ func (s Service) postPasses(ctx context.Context) error {
 	_, _ = s.Store.PruneArchivedDigests(ctx, retention)
 	if s.ActorTTL > 0 {
 		_, _ = s.Store.PruneStaleActors(ctx, 2*s.ActorTTL)
+	}
+	// SW-AGENT-29 Phase 5: prune hook sidecar files whose digest no
+	// longer exists in the DB (the prior PruneArchivedDigests may
+	// have removed it). Predicate hits the DB once per sidecar via
+	// ListDigests-style probe; cheap because sidecar dirs stay small
+	// (one pair per digest, digests prune at retention boundary).
+	if s.DataDir != "" {
+		sidecarDir := filepath.Join(s.DataDir, "hooks")
+		_, _ = hooks.PruneOrphanedSidecars(sidecarDir, func(digestID string) bool {
+			_, err := s.Store.GetDigest(ctx, digestID)
+			// GetDigest returns an error only when the row doesn't
+			// exist (or the DB is broken — treat as "still tracked"
+			// to be safe rather than delete on a transient error).
+			return err == nil
+		})
 	}
 	// SW-AGENT-12: prune expired intents + leases each pass. Each row's own
 	// expires_at acts as the threshold, so no per-row TTL bookkeeping needed.

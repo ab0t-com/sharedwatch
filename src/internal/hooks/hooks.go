@@ -379,3 +379,63 @@ var osReadRand = func(b []byte) (int, error) {
 	defer f.Close()
 	return io.ReadFull(f, b)
 }
+
+// PruneOrphanedSidecars deletes hook sidecar files (.out / .err)
+// under sidecarDir whose corresponding digest no longer exists per
+// the isStillTracked predicate. Returns the number of files deleted.
+//
+// Called from reconcile's retention pass (Phase 5) so sidecar lifetime
+// tracks digest lifetime — once `db.PruneArchivedDigests` removes a
+// digest row, its sidecar files become orphans and are cleaned up
+// here on the next reconcile cycle.
+//
+// The function is conservative: if sidecarDir doesn't exist, return
+// (0, nil) — nothing to do. If a file can't be deleted (permission,
+// race with another reader), log via the returned error count rather
+// than abort the whole pass.
+//
+// SW-AGENT-29 Phase 5.
+func PruneOrphanedSidecars(sidecarDir string, isStillTracked func(digestID string) bool) (int, error) {
+	if sidecarDir == "" {
+		return 0, nil
+	}
+	entries, err := os.ReadDir(sidecarDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("read sidecar dir: %w", err)
+	}
+	deleted := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		// Sidecar files follow <digest_id>.out / <digest_id>.err.
+		// Parse the digest id by stripping the suffix.
+		var digestID string
+		switch {
+		case strings.HasSuffix(name, ".out"):
+			digestID = strings.TrimSuffix(name, ".out")
+		case strings.HasSuffix(name, ".err"):
+			digestID = strings.TrimSuffix(name, ".err")
+		default:
+			// Unrecognised file in the hooks dir — leave it alone.
+			// Operator scripts (audit pipelines, manual notes) may
+			// drop files here; sharedwatch only owns the .out/.err
+			// it created.
+			continue
+		}
+		if isStillTracked(digestID) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(sidecarDir, name)); err != nil {
+			// Continue past per-file errors; reconcile pass shouldn't
+			// abort a retention cycle for a single permission glitch.
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
+}

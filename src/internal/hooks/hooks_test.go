@@ -394,6 +394,87 @@ func TestEmitMetaEventStoreErrorBubbles(t *testing.T) {
 	}
 }
 
+// --- Phase 5 — sidecar retention pruning ---
+
+// TestPruneOrphanedSidecarsRemovesOrphans — the canonical Phase 5
+// case: some digests are still tracked, some have been pruned, the
+// orphaned sidecar files get removed and tracked ones survive.
+func TestPruneOrphanedSidecarsRemovesOrphans(t *testing.T) {
+	dir := t.TempDir()
+	// Create three sidecar pairs.
+	for _, id := range []string{"dig_keep", "dig_drop", "dig_also_drop"} {
+		os.WriteFile(filepath.Join(dir, id+".out"), []byte("stdout"), 0o644)
+		os.WriteFile(filepath.Join(dir, id+".err"), []byte("stderr"), 0o644)
+	}
+	// Also drop an unrelated file — should be left alone.
+	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("operator notes"), 0o644)
+
+	tracked := map[string]bool{"dig_keep": true}
+	deleted, err := PruneOrphanedSidecars(dir, func(id string) bool {
+		return tracked[id]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 2 orphan ids × 2 files each = 4 deletions.
+	if deleted != 4 {
+		t.Fatalf("expected 4 deletions, got %d", deleted)
+	}
+	// dig_keep files survive.
+	if _, err := os.Stat(filepath.Join(dir, "dig_keep.out")); err != nil {
+		t.Fatalf("dig_keep.out was wrongly deleted")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "dig_keep.err")); err != nil {
+		t.Fatalf("dig_keep.err was wrongly deleted")
+	}
+	// dig_drop files are gone.
+	if _, err := os.Stat(filepath.Join(dir, "dig_drop.out")); !os.IsNotExist(err) {
+		t.Fatalf("dig_drop.out should be deleted")
+	}
+	// Unrelated file is preserved.
+	if _, err := os.Stat(filepath.Join(dir, "notes.txt")); err != nil {
+		t.Fatalf("notes.txt was wrongly deleted (operator-owned files must stay)")
+	}
+}
+
+// TestPruneOrphanedSidecarsEmptyDir — empty sidecar dir is a no-op,
+// no error.
+func TestPruneOrphanedSidecarsEmptyDir(t *testing.T) {
+	dir := t.TempDir()
+	n, err := PruneOrphanedSidecars(dir, func(id string) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 deletions on empty dir, got %d", n)
+	}
+}
+
+// TestPruneOrphanedSidecarsMissingDir — non-existent sidecar dir is
+// a no-op (this is the "no hooks have ever fired" startup state),
+// not an error.
+func TestPruneOrphanedSidecarsMissingDir(t *testing.T) {
+	n, err := PruneOrphanedSidecars(filepath.Join(t.TempDir(), "does-not-exist"), func(id string) bool { return true })
+	if err != nil {
+		t.Fatalf("expected no error for missing dir, got %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0 deletions for missing dir, got %d", n)
+	}
+}
+
+// TestPruneOrphanedSidecarsEmptyPathNoop — empty sidecarDir param
+// (operator passed in zero-value DataDir, e.g. in tests) is a no-op.
+func TestPruneOrphanedSidecarsEmptyPathNoop(t *testing.T) {
+	n, err := PruneOrphanedSidecars("", func(id string) bool { return false })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("expected 0, got %d", n)
+	}
+}
+
 // TestRunHookEndToEndWithSidecarAndMetaEvent — the canonical Phase 2
 // happy path: real subprocess → sidecar files → meta-event in the
 // (fake) journal. Sizes in the meta-event payload must match the
