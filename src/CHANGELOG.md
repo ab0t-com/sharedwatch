@@ -4,6 +4,15 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+### Added — portable self-improvement-loop agent prompt + dogfood scenarios 25-26
+- New file `prompts/self-improvement-loop-agent-prompt.md` — portable, project-agnostic version of the dogfood-driven self-improvement loop, paste-able into other CLIs / daemons / libraries. Wraps the workflow that produced 5 bug fixes + 1 doc-drift across SW-AGENT-20 and SW-AGENT-21. (183 lines.)
+- New dogfood scenarios 25 (full precedence chain config→env→flag) and 26 (multi-root × --data-dir umbrella interaction) added to `docs/dogfood/test_dogfood.md`. Run against the deployed v0.0.8 binary; 26 passes; 25 surfaced one **non-obvious behaviour** (see below).
+
+### Documented — `config show` reports cfg-layer values, not flag layer (dogfood scenario 25)
+- Surfaced by scenario 25 against v0.0.8: `sharedwatch --hints agent config show` with `hints: terse` in `config.yaml` prints `hints: terse`, not `agent`. The flag wins for behaviour at runtime but `config show` displays the cfg-layer (config + env merge) value only.
+- This is by design (config show is showing cfg, not the per-invocation effective value), but it's non-obvious enough that an agent will be surprised. Documented as a known gotcha in `docs/agent/agent-system-prompt-20260522.md` and `Skills/sharedwatch-client/SKILL.md`.
+- No code change this round. A follow-up could add an `--effective` flag to `config show` that displays flag-layered values — file when a user asks for it.
+
 ### Changed — `--data-dir <X>` now re-derives `--watch-path` + `--db` defaults (SW-AGENT-21)
 - The umbrella semantics that match the existing on-disk shape (one tree under `data_dir/` with `watch/`, `queue.db`, `sharedwatch.lock`, ...). Previously, `--data-dir` set only `cfg.DataDir` and left `watch_path` + `db_path` at their `$XDG_DATA_HOME`-derived defaults, silently splitting the install. Now: `--data-dir <X>` also sets `WatchPath = X/watch` and `DBPath = X/queue.db` *when those weren't explicitly set* via flag, env, or config. Explicit flag / config still wins.
 - Matches conventions of other umbrella-shaped CLIs: `docker --root-dir`, older `helm --home`, `git --git-dir`, `homebrew prefix`, `pyenv root`.

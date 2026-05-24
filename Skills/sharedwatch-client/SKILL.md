@@ -80,12 +80,18 @@ sharedwatch config show
 #    silently drops the trailing flag. Use `sharedwatch sql --format jsonl "..."`
 #    OR set SHAREDWATCH_FORMAT=jsonl once and forget the flag entirely.
 #
-# 2. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
+# 2. `config show` shows cfg-layer values (config + env), NOT the
+#    flag layer. If a config sets `hints: terse` and you run with
+#    `--hints agent`, `config show` still prints `terse` even though
+#    the flag wins for behaviour. Don't use `config show` to verify
+#    what flags are doing — only what config + env are doing.
+#
+# 3. Lease violation warnings (`slog.Warn` from watcher) fire ONLY on
 #    real file changes the watcher picks up, NOT on `test emit`. To
 #    exercise the lease path, write a file to the watched dir and let
 #    the watcher detect it; `test emit` skips the lease check.
 #
-# 3. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
+# 4. The correct verb is `lease grant <path-glob>` (not `lease acquire`).
 #    Older docs may show `acquire`; the binary only accepts grant/release/
 #    renew/list.
 

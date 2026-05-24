@@ -113,6 +113,8 @@ safe_clear_files && $SW reconcile now    # baseline before next scenario
 | 22 | Stale lock file recovery (v0.0.7) | What `stop` and `run` do when a daemon died hard |
 | 23 | Misbehaving agent — text vs JSON error parity (v0.0.7) | Error shape consistency across format-aware commands |
 | 24 | Multi-agent lease warning (v0.0.7) | Watcher logs structured warning on cross-actor writes inside a lease |
+| 25 | Full precedence chain: config → env → flag (v0.0.8 dogfood) | Resolution-order regression for SW-AGENT-18 |
+| 26 | Multi-root + --data-dir umbrella (v0.0.8 dogfood) | SW-AGENT-3 × SW-AGENT-21 interaction |
 
 ---
 
@@ -929,5 +931,109 @@ $SW --data-dir "$DOG" stop
 **Pass criteria:** the structured warning fires for the cross-actor write; the relevant fields are present in the log line.
 
 **Known gotcha (for the system prompt):** lease warnings go to **logs** (slog.Warn), not the journal. An agent that wants programmatic notification of lease violations must tail the log file OR file-watch for the warning OR ask the orchestrator to scrape stderr. Building a journal-side notification is filed as a future-consideration in [`../design/hooks-discussion-20260524.md`](../design/hooks-discussion-20260524.md).
+
+**Recorded run:** see worklog.
+
+---
+
+## 25 — Full precedence chain: config → env → flag (v0.0.8 dogfood)
+
+**Goal:** verify the documented resolution order (`flag > env > config > built-in`) actually holds in a realistic scenario. Drop a `config.yaml` with a value, set an env var with a different value, pass a flag with a third value; confirm each layer wins over the one below.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-25
+rm -rf "$DOG" && mkdir -p "$DOG"
+cat > "$DOG/config.yaml" <<'YAML'
+actor: from-config
+default_format: csv
+hints: terse
+YAML
+```
+
+**Actions + expected:**
+
+```bash
+# (a) Config-only — all three values come from the file.
+$SW --data-dir "$DOG" --config "$DOG/config.yaml" config show | grep -E 'actor:|default_format:|hints:'
+# Expected:
+#   actor:           from-config
+#   default_format:  csv
+#   hints:           terse
+
+# (b) Env overrides config (two values), config-only for the third.
+SHAREDWATCH_ACTOR=from-env SHAREDWATCH_FORMAT=jsonl \
+$SW --data-dir "$DOG" --config "$DOG/config.yaml" config show | grep -E 'actor:|default_format:|hints:'
+# Expected:
+#   actor:           from-env
+#   default_format:  jsonl
+#   hints:           terse   (still from config — no env var set for it)
+
+# (c) Flag wins over both env and config for the one value it sets.
+SHAREDWATCH_ACTOR=from-env SHAREDWATCH_FORMAT=jsonl \
+$SW --data-dir "$DOG" --config "$DOG/config.yaml" --hints off config show | grep -E 'hints:'
+# Expected: hints suppressed (--quiet would similarly force off);
+#   but config show still prints the resolved cfg value, which is
+#   the env layer's preference if set, else the flag — verify:
+$SW --data-dir "$DOG" --config "$DOG/config.yaml" --actor from-flag --hints agent config show | grep -E 'actor:|hints:'
+# Expected: actor=from-flag, hints=agent
+```
+
+**What this exercises:** SW-AGENT-18 (env-var resolution layer) + SW-AGENT-19 (`--hints` flag wins over env) + SW-AGENT-21 (--data-dir umbrella). Realistic end-to-end test of the chain documented in `src/CONTRIBUTING.md` §Versioning and `docs/agent/agent-system-prompt-20260522.md`.
+
+**Pass criteria:** each layer overrides the one below; layers below remain in effect for values not set higher.
+
+**Recorded run:** see worklog table inline below this scenario in the SW-AGENT-21 tasklist or the loose dogfood capture (this pass had no associated ticket since it was a regression check, not a feature).
+
+---
+
+## 26 — Multi-root + `--data-dir` umbrella interaction (v0.0.8 dogfood)
+
+**Goal:** verify the v0.0.8 umbrella derivation plays nicely with multi-root setups. `--data-dir <X>` should derive `db_path = X/queue.db` (because no `--db` is set), but `--root auth=/path1 --root billing=/path2` should leave the explicit roots alone — both roots are watched, DB lives under the umbrella.
+
+**Setup:**
+```bash
+export DOG=/tmp/sw-scenario-26
+rm -rf "$DOG" && mkdir -p "$DOG"
+mkdir -p /tmp/sw-26-auth /tmp/sw-26-billing
+```
+
+**Actions + expected:**
+
+```bash
+# (a) Init under the umbrella with explicit multi-root.
+$SW --data-dir "$DOG" \
+    --root auth=/tmp/sw-26-auth \
+    --root billing=/tmp/sw-26-billing \
+    init
+# Expected: data_dir=$DOG, db_path=$DOG/queue.db.
+# watch_path output is omitted/empty in multi-root mode.
+
+# (b) roots subcommand shows both roots (NOT the umbrella default watch/).
+$SW --data-dir "$DOG" \
+    --root auth=/tmp/sw-26-auth \
+    --root billing=/tmp/sw-26-billing \
+    roots
+# Expected:
+#   LABEL    PATH                  PENDING  LAST EVENT
+#   auth     /tmp/sw-26-auth       0        -
+#   billing  /tmp/sw-26-billing    0        -
+
+# (c) Emit attributed events to each root via test emit + verify
+#     they land under the right watch_root in the journal.
+$SW --data-dir "$DOG" \
+    --root auth=/tmp/sw-26-auth \
+    --root billing=/tmp/sw-26-billing \
+    --actor demo test emit auth/login.go --payload '{"watch_root":"auth"}'
+# (test emit doesn't auto-attribute to a root; this is documented behaviour)
+
+# (d) DB lives at $DOG/queue.db.
+ls "$DOG/queue.db"
+# Expected: file present.
+```
+
+**What this exercises:** SW-AGENT-3 (multi-root) × SW-AGENT-21 (umbrella derivation). Catches any regression in the derivation logic when `--root` flags are present.
+
+**Pass criteria:** (a) data_dir + db_path correct under umbrella; (b) both roots shown; (d) DB at umbrella location.
 
 **Recorded run:** see worklog.
