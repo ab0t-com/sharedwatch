@@ -99,6 +99,8 @@ Set these once at session start (e.g. in your shell rc) so the agent doesn't rep
 | `SHAREDWATCH_ROOT` | `--root` filter default | For agents scoped to one root |
 | `SHAREDWATCH_CURSOR_NAME` | `--cursor-name` default | Activates cursor mode without typing the flag |
 | `SHAREDWATCH_HINTS` | `--hints` profile default | `default` / `agent` / `terse` / `off` |
+| `SHAREDWATCH_ON_DIGEST` | `--on-digest` default | Shell command (`sh -c`) fired after every digest INSERT; digest JSON on stdin; async, never blocks consumer. v0.1.0+ (SW-AGENT-29). |
+| `SHAREDWATCH_ON_DIGEST_TIMEOUT` | `--on-digest-timeout` default | Hard timeout for the `--on-digest` subprocess; default `30s`. |
 | `XDG_DATA_HOME` | data dir base | Defaults to `~/.local/share` |
 | `XDG_CONFIG_HOME` | config search root | Defaults to `~/.config` |
 

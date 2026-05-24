@@ -237,6 +237,7 @@ For quick scripted execution of the initial-orientation flow, run `scripts/orien
 | "I'm publishing work for a peer" | `test emit <path> --payload '{...}'` |
 | "I need an aggregate that isn't a built-in" | `sharedwatch schema` first, then `sharedwatch sql` |
 | "The journal is too big to skim" | start at `status`, narrow with `--path-glob` and `--since` |
+| "Did the daemon's --on-digest hook fire?" (v0.1.0+) | `events list --type hook.completed --type hook.failed --json` — every hook run produces exactly one meta-event. Sidecar stdout/stderr at `<data_dir>/hooks/<digest_id>.{out,err}`. |
 
 ## When NOT to query
 

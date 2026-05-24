@@ -4,6 +4,33 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+## SW-AGENT-29 — `--on-digest <command>` hook surface (v0.1.0 candidate)
+
+First minor-version bump in the v0.0.x patch series. Implements the design from `docs/design/hooks-discussion-20260524.md` after the user explicitly asked. Tasklist: `tickets/tasklist_20260524_091730.md` (302 lines, 7 phases).
+
+### Added — hook subprocess execution
+- New flag `--on-digest <shell-command>` on the root command (applies to `run` daemon + one-shot `consume`). Fires the supplied command via `sh -c` after every successful digest INSERT, async — the consumer returns immediately.
+- New flag `--on-digest-timeout <duration>` (default `30s`). Bounds the subprocess; on expiry the child is SIGKILL'd and a `hook.failed` meta-event is written with `reason: timeout`.
+- New env vars `SHAREDWATCH_ON_DIGEST` and `SHAREDWATCH_ON_DIGEST_TIMEOUT`. New YAML keys `on_digest:` and `on_digest_timeout:`. Full resolution chain: flag > env > config > built-in default.
+- Digest JSON delivered on the hook's **stdin** (mirrors `digest show --json` shape) so consumers can reuse the same jq recipes.
+
+### Added — observability
+- Two new event types: `hook.completed` and `hook.failed`. New source: `hook`. Every hook run produces exactly one meta-event in the journal — query via `events list --type hook.completed --type hook.failed`. Payload carries `hook_command`, `digest_id`, `exit_code`, `duration_ms`, `stdout_bytes` / `stderr_bytes`, `stdout_path` / `stderr_path`, `reason` (`success` / `timeout` / `nonzero_exit` / `spawn_error`).
+- Sidecar capture: hook stdout/stderr tee'd to `<data_dir>/hooks/<digest_id>.{out,err}`. Bounded by disk space, not memory (`io.MultiWriter` streaming).
+- Sidecar files pruned by the existing reconcile retention pass once the corresponding digest is removed (`retention_days`-driven). Operator-owned non-sidecar files in the dir are preserved — sharedwatch only deletes what it created.
+- Graceful shutdown: `sharedwatch run` waits up to 5s for in-flight hooks to drain before releasing the DB lock (`App.WaitForHooks`).
+
+### Implementation
+- New package `src/internal/hooks/`: 24 unit tests covering subprocess execution (success/timeout/nonzero/spawn-error/empty/whitespace), stdin payload round-trip, stdout/stderr capture, ctx-cancel kill, sidecar file writes (incl. 256KB streaming + nested dir creation), meta-event emission (success → `hook.completed`, any failure → `hook.failed`, empty no-op, store-error bubbling), and sidecar retention pruning (4 cases: canonical/empty/missing-dir/empty-path).
+- Real subprocess bug surfaced + fixed during Phase 1: `cmd.Run()` blocked past ctx-cancel because `sh -c "sleep N"` orphans the `sleep` grandchild which inherits the stdout pipe → fix is `cmd.WaitDelay = 500ms` (Go 1.20+).
+- `events.TypeHookCompleted`, `events.TypeHookFailed`, `events.SourceHook` constants added to the public events package.
+- `db.Adapter` interface gains `InsertEvent` (was only on concrete `db.Store`). Used by `hooks.EmitMetaEvent` so meta-events never coalesce (each hook run is a distinct user-action, not a file-change observation).
+- `config.Config` gains `OnDigest string` + `OnDigestTimeout time.Duration`. `effectiveConfigJSON` DTO + text-mode row table extended to surface both — `config show [--json]` lets operators verify the daemon picked up the right value.
+
+### Compatibility
+- Fully additive on input + output sides. Existing daemons that don't set `--on-digest` behave exactly as v0.0.11.
+- Hook surface is explicitly narrow per the design doc: NO per-event hooks (would re-introduce push-shape latency coupling), NO native webhook POST (`--on-digest "curl ..."` is more flexible), NO plugin system, NO retry logic (failures observable via meta-events; retry is the caller's policy).
+
 ## SW-AGENT-27 — multi-root `test emit --root` routing (v0.0.11 candidate)
 
 Surfaced by background dogfood (scenarios 37-40 against v0.0.9) — Finding F39-A.
