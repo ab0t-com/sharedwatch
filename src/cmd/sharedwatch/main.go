@@ -62,6 +62,12 @@ func main() {
 	// carries them through to the consumer call site uniformly.
 	onDigest := root.String("on-digest", "", "shell command to fire after every successful digest INSERT; digest JSON on stdin; async, never blocks the consumer (env SHAREDWATCH_ON_DIGEST)")
 	onDigestTimeout := root.Duration("on-digest-timeout", 0, "hard timeout for the --on-digest subprocess (default 30s; env SHAREDWATCH_ON_DIGEST_TIMEOUT)")
+	// SW-AGENT-30: event-emission tier flags. Both layer on top of the
+	// config/env values (flag wins). `--emit-override` is repeatable
+	// (k=v form) and MERGES into prior overrides rather than replacing.
+	emitProfile := root.String("emit-profile", "", "event emission tier: minimal|standard|verbose|all (env SHAREDWATCH_EMIT_PROFILE; default: standard via config)")
+	var emitOverrideFlag emitOverrideList
+	root.Var(&emitOverrideFlag, "emit-override", "force a class on/off regardless of profile, repeatable: --emit-override actor_heartbeats=true --emit-override coord=false (env SHAREDWATCH_EMIT_OVERRIDE; comma-aware)")
 	var rootAttr attrFlags
 	bindAttrFlags(root, &rootAttr, "applied to every event emitted during this invocation")
 	showVersion := root.Bool("version", false, "print version and exit")
@@ -216,6 +222,29 @@ func main() {
 	}
 	if *onDigestTimeout > 0 {
 		cfg.OnDigestTimeout = *onDigestTimeout
+	}
+	// SW-AGENT-30: event-emission flag overlay. --emit-profile is a
+	// simple replace; --emit-override merges (each flag occurrence adds
+	// to the resolved map). Same precedence model as everywhere else:
+	// flag > env > config > Default().
+	if *emitProfile != "" {
+		cfg.EmitProfile = *emitProfile
+	}
+	if len(emitOverrideFlag) > 0 {
+		if cfg.EmitOverrides == nil {
+			cfg.EmitOverrides = map[string]bool{}
+		}
+		for k, v := range emitOverrideFlag {
+			cfg.EmitOverrides[k] = v
+		}
+	}
+	// SW-AGENT-30: validate resolved emit_profile. Unknown values still
+	// resolve (TierClasses falls back to "standard") so the daemon doesn't
+	// brick on a typo, but log a warning to stderr so the operator
+	// notices. Empty string is treated as "use default" and skipped.
+	if cfg.EmitProfile != "" && !events.IsKnownProfile(cfg.EmitProfile) {
+		fmt.Fprintf(os.Stderr, "warning: unknown emit_profile %q — using \"standard\" (valid: minimal|standard|verbose|all)\n", cfg.EmitProfile)
+		cfg.EmitProfile = "standard"
 	}
 	// Merge flag > env (already in cfg) > config to get the final
 	// attribution payload for this invocation. We REPLACE rootAttr with
@@ -1901,6 +1930,36 @@ func (r *rootDefList) Set(v string) error {
 		} else {
 			*r = append(*r, config.WatchRoot{Path: p})
 		}
+	}
+	return nil
+}
+
+// emitOverrideList implements flag.Value for a repeatable --emit-override
+// flag (SW-AGENT-30). Values are `k=bool[,k=bool...]` per occurrence;
+// multiple occurrences merge. Reuses config.ParseInlineBoolMap so the
+// truthy-value syntax matches the YAML loader and the env var exactly.
+//
+// Bad entries (non-bool value, empty key) are silently dropped per the
+// parser's contract — a single bad entry shouldn't fail the whole flag.
+type emitOverrideList map[string]bool
+
+func (e *emitOverrideList) String() string {
+	if e == nil || len(*e) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(*e))
+	for k, v := range *e {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, v))
+	}
+	return strings.Join(parts, ",")
+}
+
+func (e *emitOverrideList) Set(v string) error {
+	if *e == nil {
+		*e = emitOverrideList{}
+	}
+	for k, val := range config.ParseInlineBoolMap(v) {
+		(*e)[k] = val
 	}
 	return nil
 }

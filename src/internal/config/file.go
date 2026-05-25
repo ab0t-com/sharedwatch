@@ -199,9 +199,110 @@ func Load(path string, base Config) (Config, error) {
 			if d, err := time.ParseDuration(val); err == nil {
 				cfg.OnDigestTimeout = d
 			}
+
+		// SW-AGENT-30: event-emission config keys. Inline-map values for
+		// the override and threshold fields mirror the watch_roots inline
+		// shape (`k=v,k=v`). Unknown class names in overrides are silently
+		// ignored — forward-compat with later versions that may add classes.
+		// Malformed values (non-bool, non-int, negative int) are skipped
+		// individually so a single bad entry doesn't drop the whole map.
+		case "emit_profile":
+			cfg.EmitProfile = val
+		case "emit_overrides":
+			if m := ParseInlineBoolMap(val); len(m) > 0 {
+				if cfg.EmitOverrides == nil {
+					cfg.EmitOverrides = map[string]bool{}
+				}
+				for k, v := range m {
+					cfg.EmitOverrides[k] = v
+				}
+			}
+		case "emit_thresholds":
+			if m := ParseInlineIntMap(val); len(m) > 0 {
+				if cfg.EmitThresholds == nil {
+					cfg.EmitThresholds = map[string]int{}
+				}
+				for k, v := range m {
+					cfg.EmitThresholds[k] = v
+				}
+			}
 		}
 	}
 	return cfg, s.Err()
+}
+
+// ParseInlineBoolMap parses `k=v,k=v` where each v is a bool literal
+// (true|false|1|0|yes|no|on|off, case-insensitive). Entries that fail
+// to parse are silently dropped — the caller doesn't fail the whole
+// config load for one bad entry. Empty input → nil map.
+//
+// Note: returns nil for empty input (not an empty map) so the caller's
+// `if len(m) > 0` guard treats "no value supplied" as "no change to
+// existing config" rather than "wipe to empty."
+//
+// Exported so the env_glue layer (cmd/sharedwatch/env_glue.go) can
+// reuse the same parser for SHAREDWATCH_EMIT_OVERRIDE without
+// duplicating the truthy-string handling.
+func ParseInlineBoolMap(v string) map[string]bool {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, pair := range strings.Split(v, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		eq := strings.Index(pair, "=")
+		if eq <= 0 {
+			continue // need a non-empty key
+		}
+		key := strings.TrimSpace(pair[:eq])
+		raw := strings.ToLower(strings.TrimSpace(pair[eq+1:]))
+		switch raw {
+		case "true", "1", "yes", "on":
+			out[key] = true
+		case "false", "0", "no", "off":
+			out[key] = false
+			// anything else: skip (don't add the key)
+		}
+	}
+	return out
+}
+
+// ParseInlineIntMap parses `k=v,k=v` where each v is a non-negative
+// integer. Entries that fail to parse OR have negative values are
+// silently dropped. Zero IS a valid value (semantically: disable the
+// threshold gate). Empty input → nil map (see ParseInlineBoolMap note).
+//
+// Exported for parity with ParseInlineBoolMap; currently unused outside
+// this package (SW-AGENT-30 leaves thresholds as config-file-only by
+// design, no env exposure). Kept exported so future env or flag
+// surfaces don't have to re-implement the logic.
+func ParseInlineIntMap(v string) map[string]int {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil
+	}
+	out := map[string]int{}
+	for _, pair := range strings.Split(v, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		eq := strings.Index(pair, "=")
+		if eq <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(pair[:eq])
+		n, err := strconv.Atoi(strings.TrimSpace(pair[eq+1:]))
+		if err != nil || n < 0 {
+			continue
+		}
+		out[key] = n
+	}
+	return out
 }
 
 // parseWatchRootsInline parses a comma-separated list of `label=path` entries.

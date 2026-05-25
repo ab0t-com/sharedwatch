@@ -203,3 +203,151 @@ func TestSearchConfig_XDGWhenNoLocal(t *testing.T) {
 		t.Errorf("XDG should win when no project-local exists: got %q want %q", r.LoadedPath, xdgFile)
 	}
 }
+
+// SW-AGENT-30 Phase 1.2 tests — emit_profile / emit_overrides / emit_thresholds
+// loaded from YAML; inline-map parsers handle good / bad / mixed inputs.
+
+func TestLoadEmitConfigKeys(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := strings.Join([]string{
+		"emit_profile: verbose",
+		"emit_overrides: actor_heartbeats=true,reconcile_per_cycle=false",
+		"emit_thresholds: events_failed=99,events_stuck=4,reconcile_drift=15",
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EmitProfile != "verbose" {
+		t.Fatalf("EmitProfile=%q want %q", cfg.EmitProfile, "verbose")
+	}
+	if v, ok := cfg.EmitOverrides["actor_heartbeats"]; !ok || v != true {
+		t.Fatalf("override actor_heartbeats=%v ok=%v want true,true", v, ok)
+	}
+	if v, ok := cfg.EmitOverrides["reconcile_per_cycle"]; !ok || v != false {
+		t.Fatalf("override reconcile_per_cycle=%v ok=%v want false,true", v, ok)
+	}
+	if cfg.EmitThresholds["events_failed"] != 99 {
+		t.Fatalf("threshold events_failed=%d want 99", cfg.EmitThresholds["events_failed"])
+	}
+	if cfg.EmitThresholds["events_stuck"] != 4 {
+		t.Fatalf("threshold events_stuck=%d want 4", cfg.EmitThresholds["events_stuck"])
+	}
+	if cfg.EmitThresholds["reconcile_drift"] != 15 {
+		t.Fatalf("threshold reconcile_drift=%d want 15", cfg.EmitThresholds["reconcile_drift"])
+	}
+}
+
+func TestLoadEmitConfigDefaultsPreservedWhenAbsent(t *testing.T) {
+	// A v0.0.x config that doesn't mention any emit_* key should preserve
+	// Default()'s values exactly. Regression guard for backwards compat.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("watch_path: /tmp/x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path, Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EmitProfile != "standard" {
+		t.Fatalf("expected default emit_profile=standard, got %q", cfg.EmitProfile)
+	}
+	if cfg.EmitOverrides == nil {
+		t.Fatal("EmitOverrides should be non-nil after Default() even when YAML omits it")
+	}
+	if len(cfg.EmitOverrides) != 0 {
+		t.Fatalf("expected empty overrides, got %v", cfg.EmitOverrides)
+	}
+	if cfg.EmitThresholds["events_failed"] != 50 {
+		t.Fatalf("expected default events_failed=50, got %d", cfg.EmitThresholds["events_failed"])
+	}
+	if cfg.EmitThresholds["events_stuck"] != 10 {
+		t.Fatalf("expected default events_stuck=10, got %d", cfg.EmitThresholds["events_stuck"])
+	}
+	if cfg.EmitThresholds["reconcile_drift"] != 25 {
+		t.Fatalf("expected default reconcile_drift=25, got %d", cfg.EmitThresholds["reconcile_drift"])
+	}
+}
+
+func TestParseInlineBoolMap(t *testing.T) {
+	cases := []struct {
+		in   string
+		want map[string]bool
+	}{
+		{"", nil},
+		{"   ", nil},
+		{"a=true", map[string]bool{"a": true}},
+		{"a=true,b=false", map[string]bool{"a": true, "b": false}},
+		{"a=1,b=0,c=yes,d=no,e=on,f=off", map[string]bool{"a": true, "b": false, "c": true, "d": false, "e": true, "f": false}},
+		{" a = true , b = false ", map[string]bool{"a": true, "b": false}}, // whitespace tolerance
+		{"a=TRUE,b=False", map[string]bool{"a": true, "b": false}},         // case-insensitive
+		{"a=maybe,b=true", map[string]bool{"b": true}},                     // bad value dropped, others kept
+		{"=true,b=true", map[string]bool{"b": true}},                       // empty key dropped
+		{"a,b=true", map[string]bool{"b": true}},                           // no `=` dropped
+		{",,,", map[string]bool{}},                                         // all empty entries → empty map (not nil)
+	}
+	for _, tc := range cases {
+		got := ParseInlineBoolMap(tc.in)
+		if !boolMapEqual(got, tc.want) {
+			t.Errorf("ParseInlineBoolMap(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestParseInlineIntMap(t *testing.T) {
+	cases := []struct {
+		in   string
+		want map[string]int
+	}{
+		{"", nil},
+		{"   ", nil},
+		{"a=5", map[string]int{"a": 5}},
+		{"a=5,b=10", map[string]int{"a": 5, "b": 10}},
+		{"a=0", map[string]int{"a": 0}},                    // zero is valid (disable threshold)
+		{"a=-1", map[string]int{}},                         // negative dropped
+		{"a=abc", map[string]int{}},                        // non-numeric dropped
+		{"a=5,b=-1,c=10", map[string]int{"a": 5, "c": 10}}, // negative dropped, others kept
+		{" a = 5 , b = 10 ", map[string]int{"a": 5, "b": 10}},
+		{"=5,b=10", map[string]int{"b": 10}},
+	}
+	for _, tc := range cases {
+		got := ParseInlineIntMap(tc.in)
+		if !intMapEqual(got, tc.want) {
+			t.Errorf("ParseInlineIntMap(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+func boolMapEqual(a, b map[string]bool) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}
+
+func intMapEqual(a, b map[string]int) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for k, v := range a {
+		if bv, ok := b[k]; !ok || bv != v {
+			return false
+		}
+	}
+	return true
+}

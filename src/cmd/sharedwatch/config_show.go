@@ -11,6 +11,7 @@ import (
 	"text/tabwriter"
 
 	"sharedwatch/internal/config"
+	"sharedwatch/internal/events"
 )
 
 // handleConfigShow implements `sharedwatch config show`.
@@ -151,6 +152,11 @@ func effectiveConfigRows(cfg config.Config) [][2]string {
 		{"", ""},
 		{"on_digest", defaultDashLocal(cfg.OnDigest)},
 		{"on_digest_timeout", cfg.OnDigestTimeout.String()},
+		{"", ""},
+		{"emit_profile", defaultDashLocal(cfg.EmitProfile)},
+		{"emit_overrides", formatBoolMap(cfg.EmitOverrides)},
+		{"emit_thresholds", formatIntMap(cfg.EmitThresholds)},
+		{"emit_effective_classes", formatEffectiveClasses(cfg.EmitProfile, cfg.EmitOverrides)},
 	}
 	// Drop trailing empty rows for cleaner output if cfg lacks the separator targets.
 	return rows
@@ -172,6 +178,85 @@ func defaultDashLocal(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// formatBoolMap renders a `k=v,k=v` text-mode view of a string→bool
+// map with deterministic key ordering. Empty map renders as "-".
+// SW-AGENT-30 Phase 1.5: used for `emit_overrides` in `config show`.
+func formatBoolMap(m map[string]bool) string {
+	if len(m) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%v", k, m[k]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatIntMap is the int-valued counterpart for `emit_thresholds`.
+func formatIntMap(m map[string]int) string {
+	if len(m) == 0 {
+		return "-"
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%d", k, m[k]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatEffectiveClasses renders the resolved class-emission decision
+// (profile + overrides) as a comma-separated `class=bool` list using
+// events.AllClasses() ordering. This is the operator-verification
+// surface — answers "did my config actually land?".
+func formatEffectiveClasses(profile string, overrides map[string]bool) string {
+	resolved := events.ResolveEffectiveClasses(profile, overrides)
+	parts := make([]string, 0, len(resolved))
+	for _, c := range events.AllClasses() {
+		parts = append(parts, fmt.Sprintf("%s=%v", c, resolved[c]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// nonNilBoolMap / nonNilIntMap guard the JSON renderer so empty config
+// maps marshal as `{}` (the H8-B-style fix at JSON encode time) rather
+// than `null`. The maps from `config.Default()` are always non-nil, but
+// defensive coding in case a future caller hands us a nil map.
+func nonNilBoolMap(m map[string]bool) map[string]bool {
+	if m == nil {
+		return map[string]bool{}
+	}
+	return m
+}
+
+func nonNilIntMap(m map[string]int) map[string]int {
+	if m == nil {
+		return map[string]int{}
+	}
+	return m
+}
+
+// classMapToStringKeys converts events.Class → string so the JSON
+// encoder emits raw string keys (events.Class is a typed string but
+// json.Marshal handles it; explicit conversion makes the intent
+// clear).
+func classMapToStringKeys(m map[events.Class]bool) map[string]bool {
+	out := make(map[string]bool, len(m))
+	for k, v := range m {
+		out[string(k)] = v
+	}
+	return out
 }
 
 // effectiveConfigJSON is the snake_case, duration-string presentation DTO for
@@ -219,6 +304,20 @@ type effectiveConfigJSON struct {
 	// without having to special-case it.
 	OnDigest        string `json:"on_digest"`
 	OnDigestTimeout string `json:"on_digest_timeout"`
+
+	// SW-AGENT-30 (Phase 1.5): event-emission config surfaced for
+	// `config show`. No omitempty on any of these — empty/zero values
+	// render as their natural form so operators can distinguish
+	// "unset / default" from "key missing" (same lesson as H8-B).
+	EmitProfile    string          `json:"emit_profile"`
+	EmitOverrides  map[string]bool `json:"emit_overrides"`
+	EmitThresholds map[string]int  `json:"emit_thresholds"`
+	// EmitEffectiveClasses is the DERIVED resolution of profile +
+	// overrides. Operator-verification surface — answers "did my
+	// config actually land?" without having to remember which classes
+	// each tier enables. Always present (never empty); ordering is
+	// deterministic per events.AllClasses().
+	EmitEffectiveClasses map[string]bool `json:"emit_effective_classes"`
 }
 
 type rootJSON struct {
@@ -228,34 +327,38 @@ type rootJSON struct {
 
 func toEffectiveConfigJSON(cfg config.Config) effectiveConfigJSON {
 	out := effectiveConfigJSON{
-		WatchPath:         cfg.WatchPath,
-		DBPath:            cfg.DBPath,
-		DataDir:           cfg.DataDir,
-		Actor:             cfg.Actor,
-		ActorKind:         cfg.ActorKind,
-		Session:           cfg.Session,
-		Task:              cfg.Task,
-		Addressee:         cfg.Addressee,
-		DefaultFormat:     cfg.DefaultFormat,
-		DefaultRoot:       cfg.DefaultRoot,
-		DefaultSince:      cfg.DefaultSince,
-		Hints:             cfg.Hints,
-		CursorName:        cfg.CursorName,
-		CoalesceWindow:    cfg.CoalesceWindow.String(),
-		PassiveInterval:   cfg.PassiveInterval.String(),
-		ActiveInterval:    cfg.ActiveInterval.String(),
-		ActiveTTL:         cfg.ActiveTTL.String(),
-		ReconcileInterval: cfg.ReconcileInterval.String(),
-		MaxBatchSize:      cfg.MaxBatchSize,
-		RetentionDays:     cfg.RetentionDays,
-		ActorTTL:          cfg.ActorTTL.String(),
-		HashEnabled:       cfg.HashEnabled,
-		HashMaxSize:       cfg.HashMaxSize,
-		ProducerID:        cfg.ProducerID,
-		IgnorePatterns:    cfg.IgnorePatterns,
-		IncludePatterns:   cfg.IncludePatterns,
-		OnDigest:          cfg.OnDigest,
-		OnDigestTimeout:   cfg.OnDigestTimeout.String(),
+		WatchPath:            cfg.WatchPath,
+		DBPath:               cfg.DBPath,
+		DataDir:              cfg.DataDir,
+		Actor:                cfg.Actor,
+		ActorKind:            cfg.ActorKind,
+		Session:              cfg.Session,
+		Task:                 cfg.Task,
+		Addressee:            cfg.Addressee,
+		DefaultFormat:        cfg.DefaultFormat,
+		DefaultRoot:          cfg.DefaultRoot,
+		DefaultSince:         cfg.DefaultSince,
+		Hints:                cfg.Hints,
+		CursorName:           cfg.CursorName,
+		CoalesceWindow:       cfg.CoalesceWindow.String(),
+		PassiveInterval:      cfg.PassiveInterval.String(),
+		ActiveInterval:       cfg.ActiveInterval.String(),
+		ActiveTTL:            cfg.ActiveTTL.String(),
+		ReconcileInterval:    cfg.ReconcileInterval.String(),
+		MaxBatchSize:         cfg.MaxBatchSize,
+		RetentionDays:        cfg.RetentionDays,
+		ActorTTL:             cfg.ActorTTL.String(),
+		HashEnabled:          cfg.HashEnabled,
+		HashMaxSize:          cfg.HashMaxSize,
+		ProducerID:           cfg.ProducerID,
+		IgnorePatterns:       cfg.IgnorePatterns,
+		IncludePatterns:      cfg.IncludePatterns,
+		OnDigest:             cfg.OnDigest,
+		OnDigestTimeout:      cfg.OnDigestTimeout.String(),
+		EmitProfile:          cfg.EmitProfile,
+		EmitOverrides:        nonNilBoolMap(cfg.EmitOverrides),
+		EmitThresholds:       nonNilIntMap(cfg.EmitThresholds),
+		EmitEffectiveClasses: classMapToStringKeys(events.ResolveEffectiveClasses(cfg.EmitProfile, cfg.EmitOverrides)),
 	}
 	for _, r := range cfg.WatchRoots {
 		out.WatchRoots = append(out.WatchRoots, rootJSON{Label: r.Label, Path: r.Path})

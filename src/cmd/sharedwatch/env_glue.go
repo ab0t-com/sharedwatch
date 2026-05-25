@@ -25,6 +25,11 @@ const (
 	// SW-AGENT-29.
 	envOnDigest        = "SHAREDWATCH_ON_DIGEST"
 	envOnDigestTimeout = "SHAREDWATCH_ON_DIGEST_TIMEOUT"
+	// SW-AGENT-30. Thresholds are intentionally NOT exposed via env —
+	// they're operator-only config-file knobs (avoid over-engineering;
+	// no use case for setting them per-invocation).
+	envEmitProfile  = "SHAREDWATCH_EMIT_PROFILE"
+	envEmitOverride = "SHAREDWATCH_EMIT_OVERRIDE"
 )
 
 // knownEnvVars is the canonical list, in display order, for `config show`.
@@ -32,6 +37,7 @@ var knownEnvVars = []string{
 	envActor, envActorKind, envSession, envTask, envAddressee,
 	envFormat, envRoot, envCursorName, envHints,
 	envOnDigest, envOnDigestTimeout,
+	envEmitProfile, envEmitOverride,
 }
 
 // applyEnvToConfig overlays SHAREDWATCH_* env vars onto the loaded config,
@@ -77,6 +83,23 @@ func applyEnvToConfig(cfg config.Config) config.Config {
 	if v := os.Getenv(envOnDigestTimeout); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.OnDigestTimeout = d
+		}
+	}
+	// SW-AGENT-30: event-emission env overlay. Override map MERGES into
+	// the config-loaded map rather than replacing it — env can layer
+	// extra overrides on top of what config.yaml set, matching the
+	// principle that env > config-file (env adds; doesn't blank).
+	if v := os.Getenv(envEmitProfile); v != "" {
+		cfg.EmitProfile = v
+	}
+	if v := os.Getenv(envEmitOverride); v != "" {
+		if m := config.ParseInlineBoolMap(v); len(m) > 0 {
+			if cfg.EmitOverrides == nil {
+				cfg.EmitOverrides = map[string]bool{}
+			}
+			for k, val := range m {
+				cfg.EmitOverrides[k] = val
+			}
 		}
 	}
 	return cfg

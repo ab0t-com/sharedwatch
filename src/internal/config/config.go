@@ -69,6 +69,34 @@ type Config struct {
 	// OnDigestTimeout bounds the subprocess (default 30s if zero).
 	OnDigest        string
 	OnDigestTimeout time.Duration
+
+	// SW-AGENT-30 (event surface expansion). Three fields control which
+	// of the ~25 event types sharedwatch can emit actually land in the
+	// journal. See docs/design/event-and-hook-surface-expansion-20260524.md
+	// §0 for the principle, and docs/design/event-broker-consumer-contracts-20260525.md
+	// for the consumer-side use cases.
+	//
+	// EmitProfile is the tier name: "minimal" | "standard" | "verbose" | "all".
+	// Empty or unrecognised values fall back to "standard" at config
+	// resolution time (with a warning logged). Defaults to "standard".
+	EmitProfile string
+	// EmitOverrides is a per-class opt-in/opt-out map applied AFTER the
+	// profile resolves. Keys are class names from internal/events/profile.go
+	// (e.g. "actor_heartbeats", "reconcile_per_cycle"). True = force the
+	// class to emit regardless of profile; false = force it off. Unknown
+	// class names are silently ignored (forward-compat for classes added
+	// in later versions). Defaults to an empty (non-nil) map so reads are
+	// always safe.
+	EmitOverrides map[string]bool
+	// EmitThresholds tunes the rising-edge events that only fire when a
+	// counter crosses a configured value. Three keys:
+	//   - "events_failed"   → events.failed_threshold (default 50)
+	//   - "events_stuck"    → events.stuck_detected (default 10)
+	//   - "reconcile_drift" → reconcile.drift_detected (default 25)
+	// Zero disables the threshold gate for that event (the event never
+	// fires). Negative values are rejected at config resolution time.
+	// Map is always non-nil post-Default(); reads are always safe.
+	EmitThresholds map[string]int
 }
 
 // defaultDataHome resolves the XDG_DATA_HOME spec: $XDG_DATA_HOME if set,
@@ -127,5 +155,21 @@ func Default() Config {
 		// holding a goroutine forever.
 		OnDigest:        "",
 		OnDigestTimeout: 30 * time.Second,
+
+		// SW-AGENT-30: event-emission defaults.
+		// - "standard" is the smart default: covers the integration
+		//   needs of ~95% of users per docs/design/event-broker-consumer-contracts-20260525.md §3.
+		// - Empty overrides map (non-nil) lets the resolver write entries
+		//   without a nil-map panic.
+		// - Default thresholds are conservative: failure thresholds high
+		//   enough to avoid alert noise on normal operation; reconcile
+		//   drift threshold high enough that a healthy daemon never trips it.
+		EmitProfile:   "standard",
+		EmitOverrides: map[string]bool{},
+		EmitThresholds: map[string]int{
+			"events_failed":   50,
+			"events_stuck":    10,
+			"reconcile_drift": 25,
+		},
 	}
 }
