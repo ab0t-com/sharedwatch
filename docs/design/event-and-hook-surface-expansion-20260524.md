@@ -1,7 +1,7 @@
 # sharedwatch — event + hook surface expansion roadmap
 
 **Date:** 2026-05-24
-**Status:** design discussion (not a decision, not a ticket — yet)
+**Status:** design discussion → **approved direction (user, 2026-05-24)**; implementation tracked separately.
 **Author:** claude (this session)
 **Companions:**
   - [`hooks-discussion-20260524.md`](./hooks-discussion-20260524.md) — the discussion that produced SW-AGENT-29 (`--on-digest`)
@@ -9,6 +9,107 @@
   - [`cursor-filter-change-discussion-20260524.md`](./cursor-filter-change-discussion-20260524.md) — SW-AGENT-28 candidate
 
 We shipped `--on-digest` in v0.1.0. The user asked the natural next question: "what other hooks should we add?" This doc thinks about it deeply, because the right answer isn't a list — it's a principle that determines what should be a hook, what should be a journal event, and what should stay where it is.
+
+---
+
+## 0. **PRINCIPLE REFRAME (user clarification, 2026-05-24)**
+
+> "The calm interface is the digest, but we can still emit events for other tools or clients to use — that is not our business what they do with them."
+> — user, on reading the §2 principle below
+
+This update overrides the cautious framing in §2's "default to no on the hook unless the signal is high-traffic enough" and §3's curated-list approach. **Both are too conservative.**
+
+### Restated principle
+
+- **The calm contract was always about hooks (push), not events (pull).** A hook fires a callback into the consumer's process; that's where backpressure, fork-bomb, latency-coupling risks live. An event is just a row in a local SQLite table — writing it is single-digit microseconds, has zero impact on file-watching, and no consumer is forced to read it.
+- **A signal landing in the journal is not the same as a signal being pushed at a consumer.** Clients self-select via cursors and filters. We do not decide for them what's interesting.
+- **The digest remains the calm primitive for "what just happened?" summaries.** That's the human-facing rollup. The raw event journal sits underneath — anyone who wants the raw stream tails it; anyone who wants the rollup reads digests.
+- **Therefore: emit liberally.** Every state change sharedwatch detects internally should be representable as an event type. Storage cost is bounded by retention. Filter cost is borne by consumers (and only those that opt to subscribe).
+
+### What this changes vs the original §2 framing
+
+| Original framing (§2 below) | Updated principle (this section) |
+|---|---|
+| "Default to no on the hook unless the signal is high-traffic enough" | Stays — applies to **hooks** specifically. |
+| "Default to journal-event-then-hook-shortcut, but think carefully about which events to add" | **Replaced.** Default to emitting *all* signals the daemon knows about. Curation moves from "what do we emit?" to "what do we emit by default at each tier?" |
+| §3 catalog ~24 event types is the proposed scope | **Floor, not ceiling.** Implement all of §3 PLUS the minute ones we deferred (mode TTL extends, actor heartbeats, snapshot completions, watcher errors, DB write failures, cursor reads where useful). |
+| §5 stays unchanged | Hook surface remains narrow per the calm contract. Only the *event* surface expands liberally. |
+
+### Why this is safe
+
+The two real costs of emitting events:
+
+1. **Storage** — every event is ~200-500 bytes in SQLite. At 1000 events/day that's 0.5 MB/day, retained 30 days = 15 MB. Even verbose-tier (~10× that) caps out at ~150 MB. Negligible vs. the gigabytes of actual file content the watched directory contains.
+2. **Query noise** — chatty event types can flood `events list` results. **Mitigation: client-side filters.** `--type` is already repeatable; `--source` already exists; cursors are already named per-scope. Clients who want only file events filter to `--source watcher,reconciler`; clients who want everything get everything.
+
+The cost we are NOT paying:
+
+- **Watcher backpressure** — emit is just an INSERT, decoupled from the file-watching loop.
+- **Consumer attention** — consumers only see what their filters select.
+- **Forced integration work** — adding a new event type is purely additive; no consumer breaks because we added `mode.ttl_extended`.
+
+### Configuration philosophy
+
+Clients control what gets emitted via a **tier profile** with per-class overrides:
+
+```yaml
+# Default — what 95% of users will run.
+emit_profile: standard
+
+# Optional per-class overrides for fine-tuning.
+emit_overrides:
+  actor_heartbeats: true     # opt INTO a verbose-tier class
+  reconcile_per_cycle: false # opt OUT of a standard-tier class
+```
+
+Four tiers:
+
+- **`minimal`** — file events + reconciler events only. Backwards-compatible with v0.0.x. For storage-constrained environments or users who only care about file activity.
+- **`standard`** (default) — minimal + `digest.*` + `hook.*` + lifecycle (daemon.started/.stopping/.crashed) + `mode.changed` (NOT `.ttl_extended`) + `retention.ran` + failure-threshold events + coord events (lease/intent declare/grant/revoke/violated/expired/renewed) + `actor.registered`/`actor.removed`. The "useful, low-volume" set. Covers ~95% of integration needs.
+- **`verbose`** — standard + `reconcile.ran` (per-cycle) + `mode.ttl_extended` + `actor.went_stale` + `snapshot.taken`/`snapshot.failed` + `db.error`. The "I want operational observability" set. Adds a few hundred events/day on a busy folder.
+- **`all`** — verbose + `actor.heartbeat_received` + cursor activity + every internal state change we can name. For full audit, replay, or research use cases. Can be many thousands of events/day with active multi-agent coordination.
+
+Resolution chain stays standard (**flag > env > config > default**):
+- Flag: `--emit-profile <tier>` and `--emit-override <class>=<bool>` (repeatable)
+- Env: `SHAREDWATCH_EMIT_PROFILE=verbose`
+- Config: `emit_profile:` + `emit_overrides:` map keys
+- Default: `standard`
+
+`config show --json` surfaces the resolved profile + every override + the effective enable list per class so operators can verify what the daemon will actually emit.
+
+### Hook surface stays narrow
+
+The principle above expands the *event* surface, not the hook surface. Hooks still incur the costs §2 documents (CLI surface, per-hook code path, scope-discovery problem). The original §4 tiering for hooks is still correct:
+
+- **Tier 1 hooks** (build): `--on-mode-change`, `--on-startup`, `--on-shutdown` — calm-shaped, narrow scope, real ergonomic win over a cursor tail.
+- **Tier 2 hooks** (build on demand): `--on-failed-events`, `--on-lease-violation` — useful for narrower audiences.
+- **Tier 3+** (don't build until a user asks): everything else stays in journal-event form. Tail with a cursor.
+
+Per-event hooks (§5.1) stay explicitly off the table — the calm-contract risk is real for hooks even though it's not for events.
+
+### Roadmap recast
+
+The original §8 phased rollout assumed each tier of journal events would ship in its own version. **Under the updated principle, we land the full event surface in one sprint and gate it behind the tier config.** Users opt into more by raising their `emit_profile`; new event types don't ship as breaking changes because they only appear at the verbose/all tiers by default.
+
+- **v0.1.1 — SW-AGENT-30: event surface expansion.** All event types in §3 (plus the minute ones from §0's "verbose" and "all" tiers) implemented, gated by `emit_profile`. Default tier = `standard`. New tests, doc updates, CHANGELOG. Multi-day ticket.
+- **v0.1.2 — SW-AGENT-31: hook surface additions.** `--on-mode-change`, `--on-startup`, `--on-shutdown` per §4.1. Smaller follow-up.
+- **v0.2.0 — SW-AGENT-32: failure + observability hooks.** `--on-failed-events`, `--on-lease-violation` per §4.2. Bundles with config tweaks.
+
+### What we are NOT changing
+
+- The §5 rejection list (no per-event hooks, no native webhook, no plugins, no synchronous veto). Still no.
+- The §6 "one flag per hook" composition decision. Stays through ~5 hooks.
+- The `--on-digest` shape shipped in SW-AGENT-29. Stays unchanged.
+- The retention behaviour. Events still prune at `retention_days`; verbose-tier events disappear on the same schedule.
+
+### Open questions raised by this reframe
+
+- **OQ-1**: Should `digest.created` be a new explicit event type, or do we keep digest creation implicit (only visible via the digests table) and let `hook.completed`/`hook.failed` continue to be the journal-side signal? Recommendation: emit `digest.created` explicitly. Closes the symmetry gap (every other signal has an event type).
+- **OQ-2**: Threshold-gated events (`reconcile.drift_detected`, `events.failed_threshold`) — should the threshold be in the same `emit_overrides` map, or its own `emit_thresholds`? Recommendation: separate (`emit_thresholds: { reconcile_drift: 10, events_failed: 50 }`). Keeps the toggle and threshold concerns separate.
+- **OQ-3**: Per-event-type overrides vs. per-class overrides? E.g. can a user enable only `lease.violated` without enabling all `coord` events? Recommendation: per-class for v1; per-type if users actually request it.
+- **OQ-4**: Should `emit_profile` apply uniformly across roots in multi-root mode, or be per-root? Recommendation: uniform for v1. Per-root would mean per-root event prefix `<root>.<type>`; not worth the complexity until asked.
+
+---
 
 ---
 
