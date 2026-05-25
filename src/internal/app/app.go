@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -349,6 +350,17 @@ func (a *App) ConsumeNow(ctx context.Context) (digest.Digest, bool, error) {
 			rt.ActiveUntil = time.Now().UTC().Add(a.Cfg.ActiveTTL)
 		}
 		_ = a.Store.UpsertRuntime(ctx, rt)
+		// SW-AGENT-30 Phase 4.1: emit `digest.created` into the journal
+		// for stream-shaped consumers (CI triggers, audit archivers, AI
+		// peer-discovery bots — see docs/design/event-broker-consumer-contracts-20260525.md
+		// §3). Gated by ShouldEmit; ClassDigest is at standard tier so
+		// this fires by default but minimal-tier installs see nothing.
+		// MUST happen BEFORE FireHookAsync so the order is:
+		//   1. digest INSERT commits (consumer)
+		//   2. digest.created meta-event lands (this)
+		//   3. hook fires async with the digest JSON on stdin
+		// — gives stream consumers a deterministic "before-hook" view.
+		a.emitDigestCreated(ctx, d)
 		// SW-AGENT-29 Phase 4: fire the --on-digest hook async. The
 		// digest INSERT has already committed by this point, so the
 		// hook always sees a complete row. FireHookAsync returns
@@ -357,6 +369,232 @@ func (a *App) ConsumeNow(ctx context.Context) (digest.Digest, bool, error) {
 		a.FireHookAsync(ctx, d)
 	}
 	return d, ok, nil
+}
+
+// emitDigestCreated writes a `digest.created` event into the journal
+// for stream consumers. Payload mirrors the hook stdin shape (and
+// `digest show --json`) so subscribers can use the same jq recipes
+// across all three surfaces.
+//
+// Failure is non-fatal: logs and continues. The digest itself has
+// already committed by this point, so we never block the consumer's
+// primary work on emission. SW-AGENT-30 Phase 4.1.
+func (a *App) emitDigestCreated(ctx context.Context, d digest.Digest) {
+	if !events.ShouldEmit(events.TypeDigestCreated, a.Cfg.EmitProfile, a.Cfg.EmitOverrides) {
+		return
+	}
+	payload, err := json.Marshal(struct {
+		SchemaVersion int       `json:"schema_version"`
+		ID            string    `json:"id"`
+		CreatedAt     time.Time `json:"created_at"`
+		WindowStart   time.Time `json:"window_start"`
+		WindowEnd     time.Time `json:"window_end"`
+		Mode          string    `json:"mode"`
+		EventCount    int       `json:"event_count"`
+		Summary       string    `json:"summary"`
+		Status        string    `json:"status"`
+		WatchRoot     string    `json:"watch_root,omitempty"`
+	}{
+		SchemaVersion: 1,
+		ID:            d.ID,
+		CreatedAt:     d.CreatedAt,
+		WindowStart:   d.WindowStart,
+		WindowEnd:     d.WindowEnd,
+		Mode:          d.Mode,
+		EventCount:    d.EventCount,
+		Summary:       d.Summary,
+		Status:        string(d.Status),
+		WatchRoot:     d.WatchRoot,
+	})
+	if err != nil {
+		a.Logger.Error("digest.created marshal failed", "err", err, "digest_id", d.ID)
+		return
+	}
+	e := events.Event{
+		ID:          newMetaEventID(),
+		Type:        events.TypeDigestCreated,
+		RelPath:     d.ID, // path-glob filterable: `events list --path-glob 'dgs_*'`
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceDaemon,
+		Status:      events.StatusProcessed, // meta-events are terminal — no consumer touches them
+		PayloadJSON: string(payload),
+		WatchRoot:   d.WatchRoot,
+	}
+	if err := a.Store.InsertEvent(ctx, e); err != nil {
+		a.Logger.Error("digest.created insert failed", "err", err, "digest_id", d.ID)
+	}
+}
+
+// newMetaEventID generates an event id for journal meta-events
+// (digest.created, daemon.*, mode.*, reconcile.*, retention.*,
+// coord.*, actor.*). Format matches the existing "evt_" + 16 hex
+// scheme used by the watcher (newID) and the hook subsystem so
+// downstream tooling can treat all event ids uniformly.
+//
+// Shared between every SW-AGENT-30 emit site in this file. We
+// reimplement here rather than importing the watcher's `newID`
+// (which is unexported) — they're both 5-line helpers and the
+// duplication is cheaper than refactoring an export.
+func newMetaEventID() string {
+	var b [8]byte
+	if _, err := osReadRand(b[:]); err != nil {
+		// Fallback to time-based id; collisions astronomically
+		// unlikely at our event rate (hooks: <1/sec, meta: <100/sec).
+		return fmt.Sprintf("evt_%016x", time.Now().UnixNano())
+	}
+	const hex = "0123456789abcdef"
+	out := make([]byte, 16)
+	for i, by := range b {
+		out[i*2] = hex[by>>4]
+		out[i*2+1] = hex[by&0x0f]
+	}
+	return "evt_" + string(out)
+}
+
+// osReadRand is a seam for the rand source; tests can stub if needed.
+// Production reads from /dev/urandom directly (avoids the small
+// crypto/rand setup overhead, matches the hook subsystem's helper).
+var osReadRand = func(b []byte) (int, error) {
+	f, err := os.Open("/dev/urandom")
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	return io.ReadFull(f, b)
+}
+
+// emitDaemonStarted writes a `daemon.started` event into the journal.
+// Subscribers (watchdogs, audit pipelines, etc.) use it to detect
+// expected vs. unexpected restarts. SW-AGENT-30 Phase 4.2.
+func (a *App) emitDaemonStarted(ctx context.Context, startedAt time.Time) {
+	if !events.ShouldEmit(events.TypeDaemonStarted, a.Cfg.EmitProfile, a.Cfg.EmitOverrides) {
+		return
+	}
+	watchPaths := []string{}
+	if len(a.Cfg.WatchRoots) > 0 {
+		for _, r := range a.Cfg.WatchRoots {
+			watchPaths = append(watchPaths, r.Path)
+		}
+	} else if a.Cfg.WatchPath != "" {
+		watchPaths = []string{a.Cfg.WatchPath}
+	}
+	payload, _ := json.Marshal(struct {
+		SchemaVersion int       `json:"schema_version"`
+		Version       string    `json:"version"`
+		PID           int       `json:"pid"`
+		WatchPaths    []string  `json:"watch_paths"`
+		StartedAt     time.Time `json:"started_at"`
+	}{
+		SchemaVersion: 1,
+		Version:       "dev", // Phase 4 doesn't have access to main.Version; future: thread via cfg
+		PID:           os.Getpid(),
+		WatchPaths:    watchPaths,
+		StartedAt:     startedAt,
+	})
+	e := events.Event{
+		ID:          newMetaEventID(),
+		Type:        events.TypeDaemonStarted,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceDaemon,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(payload),
+	}
+	if err := a.Store.InsertEvent(ctx, e); err != nil {
+		a.Logger.Error("daemon.started insert failed", "err", err)
+	}
+}
+
+// emitDaemonStopping writes a `daemon.stopping` event into the journal
+// from the deferred path in Run. SW-AGENT-30 Phase 4.2.
+//
+// Note: this fires whether shutdown was clean (ctx cancelled by signal)
+// or via an unrecoverable error. The `reason` field carries enough
+// info for subscribers to distinguish. We don't attempt to detect
+// "crash" here — that's done on the NEXT startup via stale-lock
+// detection, which produces daemon.crashed.
+func (a *App) emitDaemonStopping(ctx context.Context, startedAt time.Time) {
+	if !events.ShouldEmit(events.TypeDaemonStopping, a.Cfg.EmitProfile, a.Cfg.EmitOverrides) {
+		return
+	}
+	reason := "unknown"
+	if ctx.Err() != nil {
+		// We're being shut down because the ctx was cancelled — most
+		// commonly via signal.NotifyContext on SIGTERM/SIGINT.
+		reason = ctx.Err().Error()
+	}
+	payload, _ := json.Marshal(struct {
+		SchemaVersion int    `json:"schema_version"`
+		Reason        string `json:"reason"`
+		PID           int    `json:"pid"`
+		UptimeMS      int64  `json:"uptime_ms"`
+	}{
+		SchemaVersion: 1,
+		Reason:        reason,
+		PID:           os.Getpid(),
+		UptimeMS:      time.Since(startedAt).Milliseconds(),
+	})
+	// Use a fresh context for the insert — the caller's ctx is likely
+	// already cancelled (that's how we got into the defer).
+	insertCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	e := events.Event{
+		ID:          newMetaEventID(),
+		Type:        events.TypeDaemonStopping,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceDaemon,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(payload),
+	}
+	if err := a.Store.InsertEvent(insertCtx, e); err != nil {
+		a.Logger.Error("daemon.stopping insert failed", "err", err)
+	}
+}
+
+// emitDaemonCrashed writes a `daemon.crashed` event into the journal
+// when stale-lock detection at startup notices the previous daemon
+// didn't clean up. SW-AGENT-30 Phase 4.2.
+//
+// "Crashed" here is best-effort: a stale lock could also indicate a
+// SIGKILL, a hard reboot, or a kernel panic. From the perspective of
+// the journal it's all the same — the prior instance ended without
+// emitting daemon.stopping, which is exactly what consumers want to
+// know.
+func (a *App) emitDaemonCrashed(ctx context.Context, stale *staleLockInfo) {
+	if stale == nil {
+		return
+	}
+	if !events.ShouldEmit(events.TypeDaemonCrashed, a.Cfg.EmitProfile, a.Cfg.EmitOverrides) {
+		return
+	}
+	payload, _ := json.Marshal(struct {
+		SchemaVersion  int           `json:"schema_version"`
+		PriorPID       int           `json:"prior_pid"`
+		PriorLockAgeMS int64         `json:"prior_lock_age_ms"`
+		PriorLockAge   string        `json:"prior_lock_age"` // human-readable
+		RecoveredAt    time.Time     `json:"recovered_at"`
+		_              time.Duration `json:"-"`
+	}{
+		SchemaVersion:  1,
+		PriorPID:       stale.PriorPID,
+		PriorLockAgeMS: stale.PriorLockAge.Milliseconds(),
+		PriorLockAge:   stale.PriorLockAge.Truncate(time.Second).String(),
+		RecoveredAt:    time.Now().UTC(),
+	})
+	e := events.Event{
+		ID:          newMetaEventID(),
+		Type:        events.TypeDaemonCrashed,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceDaemon,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(payload),
+	}
+	if err := a.Store.InsertEvent(ctx, e); err != nil {
+		a.Logger.Error("daemon.crashed insert failed", "err", err)
+	}
+	a.Logger.Warn("prior daemon did not release lock cleanly — assumed crashed",
+		"prior_pid", stale.PriorPID,
+		"prior_lock_age", stale.PriorLockAge.Truncate(time.Second).String(),
+	)
 }
 
 // FireHookAsync spawns the configured --on-digest hook for d, if any.
@@ -447,11 +685,14 @@ func (a *App) WaitForHooks(timeout time.Duration) {
 }
 
 func (a *App) Run(ctx context.Context) error {
-	lock, err := acquireRunLock(a.Cfg.DBPath)
+	lock, stale, err := acquireRunLock(a.Cfg.DBPath)
 	if err != nil {
 		return err
 	}
 	defer lock.Release()
+
+	// Capture start time for daemon.stopping uptime_ms.
+	startedAt := time.Now().UTC()
 
 	watchTicker := time.NewTicker(2 * time.Second)
 	defer watchTicker.Stop()
@@ -467,6 +708,26 @@ func (a *App) Run(ctx context.Context) error {
 		"active_interval", a.Cfg.ActiveInterval.String(),
 		"reconcile_interval", a.Cfg.ReconcileInterval.String(),
 	)
+
+	// SW-AGENT-30 Phase 4.2: lifecycle events. Order matters here:
+	//  1. daemon.crashed (if we detected a stale lock from a prior
+	//     daemon that didn't release cleanly) — emitted BEFORE
+	//     daemon.started so the journal sequence is "the previous
+	//     instance crashed, then we started."
+	//  2. daemon.started — emitted after lock acquired, before the
+	//     initial scan, so subscribers know we're alive even if the
+	//     scan takes a while.
+	//  3. daemon.stopping — emitted via defer (registered immediately
+	//     below) so it fires regardless of return path.
+	if stale != nil {
+		a.emitDaemonCrashed(ctx, stale)
+	}
+	a.emitDaemonStarted(ctx, startedAt)
+	// daemon.stopping deferred BEFORE WaitForHooks (in main.go) so the
+	// event lands while a.Store is still usable. The actual defer
+	// chain is: main.go defers WaitForHooks + Close; app.Run's defer
+	// fires before either via the LIFO ordering at function exit.
+	defer a.emitDaemonStopping(ctx, startedAt)
 
 	if _, err := a.Watcher.ScanAndQueue(ctx, watcher.SnapshotSourceWatcher); err != nil {
 		return fmt.Errorf("initial watch scan: %w", err)
