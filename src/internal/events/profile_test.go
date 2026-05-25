@@ -6,7 +6,7 @@ import (
 
 func TestTierClassesMinimal(t *testing.T) {
 	m := TierClasses("minimal")
-	for _, c := range []Class{ClassFile, ClassReconciler, ClassHook} {
+	for _, c := range []Class{ClassFile, ClassHook} {
 		if !m[c] {
 			t.Errorf("minimal tier should include %q", c)
 		}
@@ -145,10 +145,40 @@ func TestResolveEffectiveClassesUnknownClassIgnored(t *testing.T) {
 }
 
 func TestResolveEffectiveClassesNilOverrides(t *testing.T) {
+	// nil overrides should produce: every class enabled in the tier
+	// baseline set to true; every other known class set to false.
+	// (The new contract — ResolveEffectiveClasses returns the COMPLETE
+	// truth table, unlike TierClasses which returns the sparse
+	// enabled-set. See ResolveEffectiveClasses doc for rationale.)
 	r := ResolveEffectiveClasses("verbose", nil)
-	expected := TierClasses("verbose")
-	if !classMapEqual(r, expected) {
-		t.Error("nil overrides should equal pure TierClasses")
+	if len(r) != len(AllClasses()) {
+		t.Errorf("ResolveEffectiveClasses should return all %d known classes, got %d", len(AllClasses()), len(r))
+	}
+	base := TierClasses("verbose")
+	for _, c := range AllClasses() {
+		want := base[c] // false if not in tier baseline
+		if r[c] != want {
+			t.Errorf("ResolveEffectiveClasses(verbose, nil)[%q] = %v, want %v (per TierClasses baseline)", c, r[c], want)
+		}
+	}
+}
+
+func TestResolveEffectiveClassesCompleteTruthTable(t *testing.T) {
+	// Regression guard for the Phase 2 contract: ResolveEffectiveClasses
+	// must always return the complete truth table — every known class
+	// with an explicit true/false. This is what makes JSON output match
+	// text output (both render all 15 classes) and what makes
+	// `result[class]` unambiguous (false = suppressed, not "missing").
+	for _, profile := range []string{"minimal", "standard", "verbose", "all"} {
+		r := ResolveEffectiveClasses(profile, nil)
+		if len(r) != len(AllClasses()) {
+			t.Errorf("profile=%q: ResolveEffectiveClasses returned %d entries, want all %d known classes", profile, len(r), len(AllClasses()))
+		}
+		for _, c := range AllClasses() {
+			if _, ok := r[c]; !ok {
+				t.Errorf("profile=%q: class %q missing from result map (must be present with explicit bool)", profile, c)
+			}
+		}
 	}
 }
 
@@ -171,8 +201,8 @@ func TestAllClassesIncludesEverything(t *testing.T) {
 	// AllClasses, knownClasses will be incomplete and overrides for
 	// the new class will be silently ignored — a real bug.
 	all := AllClasses()
-	if len(all) != 16 {
-		t.Errorf("AllClasses() returned %d classes; expected 16 (update this test count when adding classes)", len(all))
+	if len(all) != 15 {
+		t.Errorf("AllClasses() returned %d classes; expected 15 (update this test count when adding classes)", len(all))
 	}
 	seen := make(map[Class]bool, len(all))
 	for _, c := range all {
@@ -180,6 +210,110 @@ func TestAllClassesIncludesEverything(t *testing.T) {
 			t.Errorf("AllClasses() lists %q more than once", c)
 		}
 		seen[c] = true
+	}
+}
+
+// ====================================================================
+// SW-AGENT-30 Phase 2 — TypeClass + ShouldEmit
+// ====================================================================
+
+func TestTypeClassFileEvents(t *testing.T) {
+	for _, ty := range []Type{TypeCreated, TypeModified, TypeDeleted, TypeRenamed} {
+		if got := TypeClass(ty); got != ClassFile {
+			t.Errorf("TypeClass(%q) = %q, want %q", ty, got, ClassFile)
+		}
+	}
+}
+
+func TestTypeClassHookEvents(t *testing.T) {
+	for _, ty := range []Type{TypeHookCompleted, TypeHookFailed} {
+		if got := TypeClass(ty); got != ClassHook {
+			t.Errorf("TypeClass(%q) = %q, want %q", ty, got, ClassHook)
+		}
+	}
+}
+
+func TestTypeClassUnknownFallsBackToFile(t *testing.T) {
+	// Backwards-compat: legacy or future-version event types this
+	// binary doesn't recognise must fall through to ClassFile (minimal
+	// tier) so they aren't silently dropped.
+	cases := []Type{"", "made.up.type", "future.event"}
+	for _, ty := range cases {
+		if got := TypeClass(ty); got != ClassFile {
+			t.Errorf("TypeClass(%q) = %q, want fallback ClassFile", ty, got)
+		}
+	}
+}
+
+func TestShouldEmitMinimalProfileHidesEverythingButFileAndHook(t *testing.T) {
+	// At the minimal tier, only file + hook classes emit. Phase 3 will
+	// add ~20 more types; this test will be extended then. For now we
+	// verify the contract holds for the v0.1.0 type surface.
+	wantOn := []Type{TypeCreated, TypeModified, TypeDeleted, TypeRenamed, TypeHookCompleted, TypeHookFailed}
+	for _, ty := range wantOn {
+		if !ShouldEmit(ty, "minimal", nil) {
+			t.Errorf("ShouldEmit(%q, minimal) should be true", ty)
+		}
+	}
+}
+
+func TestShouldEmitStandardProfileIncludesMinimal(t *testing.T) {
+	// Anything emitting at minimal must also emit at standard.
+	for _, ty := range []Type{TypeCreated, TypeHookCompleted} {
+		if !ShouldEmit(ty, "standard", nil) {
+			t.Errorf("ShouldEmit(%q, standard) should be true (inherited from minimal)", ty)
+		}
+	}
+}
+
+func TestShouldEmitOverrideOptsClassOut(t *testing.T) {
+	// Even at standard tier, override file=false disables ClassFile.
+	// (Caveat emptor: users who set this turn off the product's
+	// primary signal; documented in profile.go.)
+	if ShouldEmit(TypeCreated, "standard", map[string]bool{"file": false}) {
+		t.Error("override file=false should suppress file events at any tier")
+	}
+}
+
+func TestShouldEmitOverrideOptsClassIn(t *testing.T) {
+	// Phase 3 will add types that map to higher-tier classes; until
+	// those exist we test the override-in path with the actor_heartbeat
+	// class (it has no mapped types yet, but the override semantics
+	// still apply — ResolveEffectiveClasses sets the bit, and once
+	// Phase 3 adds the type, ShouldEmit returns true).
+	r := ResolveEffectiveClasses("minimal", map[string]bool{"actor_heartbeat": true})
+	if !r[ClassActorHeartbeat] {
+		t.Error("override actor_heartbeat=true should enable the class at minimal tier")
+	}
+}
+
+func TestShouldEmitEmptyProfileDefaultsToStandard(t *testing.T) {
+	// Phase 2.3 backwards-compat: empty profile string falls through
+	// to the standard tier. Tests that haven't been updated to set the
+	// profile see the v0.1.0 default behaviour rather than accidentally
+	// emitting nothing.
+	if !ShouldEmit(TypeCreated, "", nil) {
+		t.Error("empty profile should default to standard, allowing file events")
+	}
+	if !ShouldEmit(TypeHookCompleted, "", nil) {
+		t.Error("empty profile should default to standard, allowing hook events")
+	}
+}
+
+func TestShouldEmitNilOverridesIsSafe(t *testing.T) {
+	// Defensive: a nil overrides map must not panic on map-read.
+	if !ShouldEmit(TypeCreated, "standard", nil) {
+		t.Error("nil overrides should not break ShouldEmit")
+	}
+}
+
+func TestShouldEmitUnknownProfileFallsBackToStandard(t *testing.T) {
+	// An unknown profile name should behave as standard at the
+	// ShouldEmit layer (the warning is logged separately at config-
+	// resolution time; the runtime authority should not brick on bad
+	// data).
+	if !ShouldEmit(TypeCreated, "totally-made-up", nil) {
+		t.Error("unknown profile should fall back to standard (file events emit)")
 	}
 }
 

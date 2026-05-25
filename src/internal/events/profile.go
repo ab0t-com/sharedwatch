@@ -26,9 +26,16 @@ type Class string
 const (
 	// Always-on classes (live at the "minimal" tier). These fire
 	// regardless of emit_profile; the tier system doesn't gate them.
-	ClassFile       Class = "file"       // file.created/.modified/.deleted/.renamed (watcher-source)
-	ClassReconciler Class = "reconciler" // reconciler-source file events
-	ClassHook       Class = "hook"       // hook.completed/.failed (already gated by --on-digest flag)
+	//
+	// Note: ClassFile covers file events from BOTH the watcher path AND
+	// the reconciler recovery path — they share `Type` (e.g.
+	// `file.created`) and differ only in `Source`. Consumers who want
+	// to exclude reconciler dupes filter at read time via
+	// `events list --source watcher`, not via emit-class config.
+	// SW-AGENT-30 Phase 2 corrected the Phase-1 ClassReconciler
+	// misconception (dropped as a class; it never had a Type to map to).
+	ClassFile Class = "file" // file.created/.modified/.deleted/.renamed (any source)
+	ClassHook Class = "hook" // hook.completed/.failed (already gated by --on-digest flag)
 
 	// Standard-tier classes — useful integration signals at low volume.
 	ClassDigest             Class = "digest"              // digest.created
@@ -56,7 +63,7 @@ const (
 func AllClasses() []Class {
 	return []Class{
 		// minimal tier
-		ClassFile, ClassReconciler, ClassHook,
+		ClassFile, ClassHook,
 		// standard tier
 		ClassDigest, ClassLifecycle, ClassModeChange, ClassRetention,
 		ClassFailureThreshold, ClassCoord, ClassActorLifecycle,
@@ -91,9 +98,8 @@ func TierClasses(profile string) map[Class]bool {
 	// minimal: classes that emit unconditionally. Even users on the
 	// strictest tier see file events — this is the v0.0.x baseline.
 	minimal := map[Class]bool{
-		ClassFile:       true,
-		ClassReconciler: true,
-		ClassHook:       true,
+		ClassFile: true,
+		ClassHook: true,
 	}
 
 	standard := copyClassMap(minimal)
@@ -133,9 +139,16 @@ func TierClasses(profile string) map[Class]bool {
 }
 
 // ResolveEffectiveClasses applies the per-class overrides on top of
-// the profile's base set and returns the final emission decision per
-// class. Used by config_show to render `emit_effective_classes` for
-// operator verification.
+// the profile's base set and returns the COMPLETE truth table — every
+// known class mapped to its final emission decision (true=emit,
+// false=suppress). Returning the full table (not just the enabled set)
+// gives callers two guarantees:
+//
+//  1. JSON serialisation includes all classes — operators see
+//     `actor_heartbeat: false` explicitly rather than a missing key,
+//     matching the text-mode `formatEffectiveClasses` output.
+//  2. `result[Class]` is unambiguous — false always means "suppressed",
+//     never "key missing." Callers don't need to disambiguate.
 //
 // Override semantics:
 //   - overrides[class]=true  → class emits regardless of tier baseline
@@ -147,15 +160,20 @@ func TierClasses(profile string) map[Class]bool {
 //     function itself stays pure
 func ResolveEffectiveClasses(profile string, overrides map[string]bool) map[Class]bool {
 	base := TierClasses(profile)
+	// Ensure every known class has an entry (defaulting to false for
+	// classes the tier doesn't enable). This makes the output a
+	// complete truth table rather than a sparse enabled-set.
+	result := make(map[Class]bool, len(knownClasses))
+	for c := range knownClasses {
+		result[c] = base[c] // false if missing from tier baseline
+	}
 	for k, v := range overrides {
 		c := Class(k)
-		// Only apply overrides for KNOWN classes. Unknown keys are
-		// silently ignored — see comment above.
 		if _, known := knownClasses[c]; known {
-			base[c] = v
+			result[c] = v
 		}
 	}
-	return base
+	return result
 }
 
 // knownClasses is the membership-test set built once for
@@ -190,4 +208,60 @@ func copyClassMap(src map[Class]bool) map[Class]bool {
 		dst[k] = v
 	}
 	return dst
+}
+
+// TypeClass maps an event Type to the Class it belongs to. ShouldEmit
+// uses this to look up whether the event's class is enabled by the
+// current profile + overrides.
+//
+// SW-AGENT-30 Phase 2. Phase 3 will add the ~20 new event types and
+// extend this switch with their class mappings; today the function
+// covers the v0.1.0 type surface (file events + hook meta-events).
+//
+// Unknown / unrecognised types fall through to ClassFile — the safe
+// backwards-compatible default. Rationale: legacy DBs may carry event
+// types this binary doesn't recognise; we want them to emit (at the
+// minimal tier) rather than be silently dropped. Phase 3+ types will
+// each get an explicit case.
+func TypeClass(t Type) Class {
+	switch t {
+	// File events (watcher AND reconciler sources share Type).
+	case TypeCreated, TypeModified, TypeDeleted, TypeRenamed:
+		return ClassFile
+
+	// Hook meta-events (SW-AGENT-29). Class is always-on at minimal
+	// tier — gating already happens via the --on-digest flag (no
+	// flag set ⇒ no hook fires ⇒ no meta-event emitted in the first
+	// place; the class boundary is belt-and-suspenders).
+	case TypeHookCompleted, TypeHookFailed:
+		return ClassHook
+
+	default:
+		// Unknown types — backwards-compatible default. Belongs at
+		// minimal tier so legacy / future-version events aren't silently
+		// dropped by an outdated client binary.
+		return ClassFile
+	}
+}
+
+// ShouldEmit is the central emission authority. Every emit site in
+// the codebase (Phase 4 wires this) routes through it:
+//
+//	if events.ShouldEmit(e.Type, cfg.EmitProfile, cfg.EmitOverrides) {
+//	    _ = store.InsertEvent(ctx, e)
+//	}
+//
+// Returns true iff the event's class (per TypeClass) is enabled by
+// the resolved tier profile combined with any per-class overrides.
+//
+// Empty profile, empty overrides, AND nil overrides all yield the
+// smart-default behaviour (standard tier; no overrides applied). This
+// ensures callers that haven't been updated yet — or tests that don't
+// set the profile — see the v0.1.0 default behaviour rather than
+// accidentally emit nothing.
+//
+// SW-AGENT-30 Phase 2.3 (the backwards-compat default).
+func ShouldEmit(t Type, profile string, overrides map[string]bool) bool {
+	class := TypeClass(t)
+	return ResolveEffectiveClasses(profile, overrides)[class]
 }
