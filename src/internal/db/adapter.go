@@ -32,6 +32,10 @@ type Adapter interface {
 	UpsertRuntimeJSON(ctx context.Context, key, valueJSON string) error
 	PendingCount(ctx context.Context) (int, error)
 	PendingCountByRoot(ctx context.Context, watchRoot string) (int, error)
+	// SW-AGENT-30 Phase 4.6: thresholds use these counters to decide
+	// whether to emit events.failed_threshold / events.stuck_detected.
+	FailedCount(ctx context.Context) (int, error)
+	StuckCount(ctx context.Context, olderThan time.Duration) (int, error)
 	LastEventAtByRoot(ctx context.Context, watchRoot string) (time.Time, error)
 	Health(ctx context.Context) (Health, error)
 	ListDigests(ctx context.Context, limit int) ([]digest.Digest, error)

@@ -90,6 +90,14 @@ func NewWithLogger(ctx context.Context, cfg config.Config, logger *slog.Logger) 
 			// SW-AGENT-29 Phase 5: enables hook-sidecar pruning in
 			// the reconcile retention pass.
 			DataDir: cfg.DataDir,
+			// SW-AGENT-30 Phase 4: plumb emit decision through so
+			// reconcile.postPasses can emit retention.ran, the
+			// reconcile.* events, and failure-threshold events at
+			// the configured tier. Logger passed for diagnostics.
+			EmitProfile:    cfg.EmitProfile,
+			EmitOverrides:  cfg.EmitOverrides,
+			EmitThresholds: cfg.EmitThresholds,
+			Logger:         logger,
 		},
 		Logger: logger,
 	}, nil
@@ -278,9 +286,22 @@ func (a *App) SetActive(ctx context.Context, ttl time.Duration) error {
 	if ttl <= 0 {
 		ttl = a.Cfg.ActiveTTL
 	}
+	// SW-AGENT-30 Phase 4.3: emit mode.changed iff this is an ACTUAL
+	// transition (passive → active, or active → active-with-different-TTL).
+	// `mode.ttl_extended` fires on the "already-active, just bumped TTL"
+	// path. Compare against the prior runtime state, then update + commit.
+	priorMode := rt.EffectiveMode(time.Now().UTC())
 	rt.Mode = mode.Active
 	rt.ActiveUntil = time.Now().UTC().Add(ttl)
-	return a.Store.UpsertRuntime(ctx, rt)
+	if err := a.Store.UpsertRuntime(ctx, rt); err != nil {
+		return err
+	}
+	if priorMode != mode.Active {
+		a.emitModeChanged(ctx, string(priorMode), string(mode.Active), "explicit", ttl)
+	} else {
+		a.emitModeTTLExtended(ctx, rt.ActiveUntil, ttl)
+	}
+	return nil
 }
 
 func (a *App) SetPassive(ctx context.Context) error {
@@ -288,9 +309,18 @@ func (a *App) SetPassive(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	priorMode := rt.EffectiveMode(time.Now().UTC())
 	rt.Mode = mode.Passive
 	rt.ActiveUntil = time.Time{}
-	return a.Store.UpsertRuntime(ctx, rt)
+	if err := a.Store.UpsertRuntime(ctx, rt); err != nil {
+		return err
+	}
+	// SW-AGENT-30 Phase 4.3: only emit on actual transitions. Forcing
+	// passive while already passive is a no-op signal.
+	if priorMode != mode.Passive {
+		a.emitModeChanged(ctx, string(priorMode), string(mode.Passive), "explicit", 0)
+	}
+	return nil
 }
 
 func (a *App) TestEmit(ctx context.Context, relPath string) (events.Event, error) {
@@ -547,6 +577,79 @@ func (a *App) emitDaemonStopping(ctx context.Context, startedAt time.Time) {
 	}
 	if err := a.Store.InsertEvent(insertCtx, e); err != nil {
 		a.Logger.Error("daemon.stopping insert failed", "err", err)
+	}
+}
+
+// emitModeChanged writes a `mode.changed` event when the daemon
+// transitions between active and passive (or when explicit re-set
+// to the same mode crosses the active/passive boundary).
+//
+// `trigger` is one of "explicit" (operator/handler set it),
+// "ttl-expired" (active TTL passed without renewal — detected by
+// the consumer when EffectiveMode reads passive after being active),
+// "event-burst" (future: auto-promote on high activity).
+//
+// `ttl` is non-zero only when the new mode is active.
+// SW-AGENT-30 Phase 4.3.
+func (a *App) emitModeChanged(ctx context.Context, from, to, trigger string, ttl time.Duration) {
+	if !events.ShouldEmit(events.TypeModeChanged, a.Cfg.EmitProfile, a.Cfg.EmitOverrides) {
+		return
+	}
+	payload := struct {
+		SchemaVersion int    `json:"schema_version"`
+		From          string `json:"from"`
+		To            string `json:"to"`
+		Trigger       string `json:"trigger"`
+		TTLSecs       int64  `json:"ttl_secs,omitempty"`
+	}{
+		SchemaVersion: 1,
+		From:          from,
+		To:            to,
+		Trigger:       trigger,
+		TTLSecs:       int64(ttl.Seconds()),
+	}
+	pj, _ := json.Marshal(payload)
+	e := events.Event{
+		ID:          newMetaEventID(),
+		Type:        events.TypeModeChanged,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceMode,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	}
+	if err := a.Store.InsertEvent(ctx, e); err != nil {
+		a.Logger.Error("mode.changed insert failed", "err", err, "from", from, "to", to)
+	}
+}
+
+// emitModeTTLExtended writes a `mode.ttl_extended` event when active-
+// mode TTL gets bumped (e.g. consumer running again during active mode).
+// Verbose-tier only — this can fire many times per hour during active
+// use. SW-AGENT-30 Phase 4.3.
+func (a *App) emitModeTTLExtended(ctx context.Context, expiresAt time.Time, extension time.Duration) {
+	if !events.ShouldEmit(events.TypeModeTTLExtended, a.Cfg.EmitProfile, a.Cfg.EmitOverrides) {
+		return
+	}
+	payload := struct {
+		SchemaVersion int       `json:"schema_version"`
+		ExpiresAt     time.Time `json:"expires_at"`
+		ExtensionSecs int64     `json:"extension_secs"`
+	}{
+		SchemaVersion: 1,
+		ExpiresAt:     expiresAt,
+		ExtensionSecs: int64(extension.Seconds()),
+	}
+	pj, _ := json.Marshal(payload)
+	e := events.Event{
+		ID:          newMetaEventID(),
+		Type:        events.TypeModeTTLExtended,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceMode,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	}
+	if err := a.Store.InsertEvent(ctx, e); err != nil {
+		a.Logger.Error("mode.ttl_extended insert failed", "err", err)
 	}
 }
 

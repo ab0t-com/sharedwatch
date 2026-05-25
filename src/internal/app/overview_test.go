@@ -60,6 +60,10 @@ func TestOverviewMultiRoot(t *testing.T) {
 		{Label: "billing", Path: billingDir},
 	}
 	cfg.PayloadJSON = events.BuildPayloadV1(events.PayloadV1{Actor: "claude-X"})
+	// SW-AGENT-30: this test asserts file-event counts; pin to
+	// minimal tier so the new reconcile meta-events (retention.ran
+	// etc., shipped at standard) don't perturb the count assertion.
+	cfg.EmitProfile = "minimal"
 
 	a, err := New(ctx, cfg)
 	if err != nil {

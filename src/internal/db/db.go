@@ -683,6 +683,21 @@ func (s *Store) FailedCount(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// StuckCount returns the number of events in `processing` status whose
+// observed_at is older than olderThan. Used by SW-AGENT-30's
+// events.stuck_detected emission gate. Read-only — the recovery itself
+// is RecoverStuckProcessing.
+func (s *Store) StuckCount(ctx context.Context, olderThan time.Duration) (int, error) {
+	cutoff := time.Now().UTC().Add(-olderThan).Format(time.RFC3339Nano)
+	var n int
+	if err := s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE status = 'processing' AND observed_at < ?`,
+		cutoff).Scan(&n); err != nil {
+		return 0, fmt.Errorf("stuck count: %w", err)
+	}
+	return n, nil
+}
+
 func (s *Store) DigestCount(ctx context.Context) (int, error) {
 	var n int
 	if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM digests`).Scan(&n); err != nil {

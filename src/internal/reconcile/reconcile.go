@@ -2,7 +2,10 @@ package reconcile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -43,6 +46,19 @@ type Service struct {
 	// pass. Empty disables sidecar pruning (kept for tests).
 	// SW-AGENT-29 Phase 5.
 	DataDir string
+	// SW-AGENT-30 Phase 4.4-4.6: emit-decision fields. Reconcile owns
+	// the emission for reconcile.ran / reconcile.drift_detected /
+	// retention.ran / events.failed_threshold / events.stuck_detected /
+	// lease.expired / intent.expired / actor.went_stale / actor.removed /
+	// snapshot.taken (every event that fires from the reconcile cycle).
+	// Empty profile → "standard" fallback per events.ShouldEmit.
+	EmitProfile    string
+	EmitOverrides  map[string]bool
+	EmitThresholds map[string]int
+	// Logger is used for emission diagnostics. Nil-safe (helper checks).
+	Logger interface {
+		Error(msg string, args ...any)
+	}
 }
 
 func (s Service) effectiveRoots() []config.WatchRoot {
@@ -53,17 +69,31 @@ func (s Service) effectiveRoots() []config.WatchRoot {
 }
 
 func (s Service) RunNow(ctx context.Context) (int, error) {
+	startedAt := time.Now()
 	total := 0
+	rootCount := 0
+	// Per-root drift detection — emit reconcile.drift_detected (standard
+	// tier, threshold-gated) for any root whose recovered count exceeds
+	// the threshold. Emission happens here (per-root) rather than in
+	// postPasses (per-cycle aggregate) so consumers can attribute drift
+	// to the specific root that's misbehaving.
 	for _, root := range s.effectiveRoots() {
 		n, err := s.reconcileRoot(ctx, root)
 		if err != nil {
 			return total, fmt.Errorf("reconcile root %q (%s): %w", root.Label, root.Path, err)
 		}
+		if n > 0 {
+			s.emitReconcileDriftDetected(ctx, root.Label, n)
+		}
 		total += n
+		rootCount++
 	}
 	if err := s.postPasses(ctx); err != nil {
 		return total, err
 	}
+	// SW-AGENT-30 Phase 4.4: per-cycle reconcile.ran summary (verbose
+	// tier). One emission per RunNow call regardless of root count.
+	s.emitReconcileRan(ctx, total, time.Since(startedAt), rootCount)
 	return total, nil
 }
 
@@ -133,18 +163,27 @@ func (s Service) reconcileRoot(ctx context.Context, root config.WatchRoot) (int,
 // per-root state — runtime checkpoint, retention pruning, actor-registry
 // prune. Extracted from RunNow so the per-root loop can stay focused on
 // snapshot/diff/emit.
+//
+// SW-AGENT-30 Phase 4.4-4.6: emits per-cycle observability events
+// (reconcile.ran, reconcile.drift_detected, retention.ran,
+// events.failed_threshold, events.stuck_detected) at the end of the
+// pass. Per-pass emission instead of rising-edge (the design doc
+// preferred rising-edge but that requires persisted prior-count state;
+// per-pass is the simpler v1 — a sustained problem fires once per
+// reconcile cycle, which is ~30 min default = manageable noise).
 func (s Service) postPasses(ctx context.Context) error {
+	startedAt := time.Now().UTC()
 	r, err := s.Store.GetRuntime(ctx)
 	if err != nil {
 		return err
 	}
-	r.LastReconcileRun = time.Now().UTC()
+	r.LastReconcileRun = startedAt
 	// For multi-root setups LastSnapshotHash is no longer a single deterministic
 	// value across all roots; we leave it as the last-seen snapshot hash from
 	// whichever root happened to finish last. Single-root semantics unchanged.
 	if r.Mode == "" {
 		r = mode.DefaultRuntime()
-		r.LastReconcileRun = time.Now().UTC()
+		r.LastReconcileRun = startedAt
 	}
 	if err := s.Store.UpsertRuntime(ctx, r); err != nil {
 		return err
@@ -154,29 +193,231 @@ func (s Service) postPasses(ctx context.Context) error {
 		days = 30
 	}
 	retention := time.Duration(days) * 24 * time.Hour
-	_, _ = s.Store.PruneOldProcessedEvents(ctx, retention)
-	_, _ = s.Store.PruneArchivedDigests(ctx, retention)
+	pruned := map[string]int64{}
+	if n, e := s.Store.PruneOldProcessedEvents(ctx, retention); e == nil {
+		pruned["events"] = n
+	}
+	if n, e := s.Store.PruneArchivedDigests(ctx, retention); e == nil {
+		pruned["digests"] = n
+	}
 	if s.ActorTTL > 0 {
-		_, _ = s.Store.PruneStaleActors(ctx, 2*s.ActorTTL)
+		if n, e := s.Store.PruneStaleActors(ctx, 2*s.ActorTTL); e == nil {
+			pruned["actors"] = n
+		}
 	}
 	// SW-AGENT-29 Phase 5: prune hook sidecar files whose digest no
-	// longer exists in the DB (the prior PruneArchivedDigests may
-	// have removed it). Predicate hits the DB once per sidecar via
-	// ListDigests-style probe; cheap because sidecar dirs stay small
-	// (one pair per digest, digests prune at retention boundary).
+	// longer exists in the DB.
 	if s.DataDir != "" {
 		sidecarDir := filepath.Join(s.DataDir, "hooks")
 		_, _ = hooks.PruneOrphanedSidecars(sidecarDir, func(digestID string) bool {
 			_, err := s.Store.GetDigest(ctx, digestID)
-			// GetDigest returns an error only when the row doesn't
-			// exist (or the DB is broken — treat as "still tracked"
-			// to be safe rather than delete on a transient error).
 			return err == nil
 		})
 	}
-	// SW-AGENT-12: prune expired intents + leases each pass. Each row's own
-	// expires_at acts as the threshold, so no per-row TTL bookkeeping needed.
-	_, _ = s.Store.PruneExpiredIntents(ctx)
-	_, _ = s.Store.PruneExpiredLeases(ctx)
+	// SW-AGENT-12: prune expired intents + leases each pass.
+	if n, e := s.Store.PruneExpiredIntents(ctx); e == nil {
+		pruned["intents"] = n
+	}
+	if n, e := s.Store.PruneExpiredLeases(ctx); e == nil {
+		pruned["leases"] = n
+	}
+
+	// SW-AGENT-30 Phase 4.5: emit retention.ran summary so audit
+	// consumers see evidence that retention happened with how-much.
+	s.emitRetentionRan(ctx, pruned, time.Since(startedAt), days)
+
+	// SW-AGENT-30 Phase 4.6: failure-surface threshold events. Both
+	// emit when the count exceeds the configured threshold; threshold=0
+	// disables (semantically meaningful — "I never want this event").
+	if failed, e := s.Store.FailedCount(ctx); e == nil {
+		s.emitFailedThreshold(ctx, failed)
+	}
+	if stuck, e := s.Store.StuckCount(ctx, 5*time.Minute); e == nil {
+		s.emitStuckDetected(ctx, stuck)
+	}
+
 	return nil
+}
+
+// shouldEmit is reconcile's local shortcut for events.ShouldEmit. Keeps
+// the per-emit call sites tight.
+func (s Service) shouldEmit(t events.Type) bool {
+	return events.ShouldEmit(t, s.EmitProfile, s.EmitOverrides)
+}
+
+// insertMeta wraps the store insert with the standard error-logging.
+// Caller has already gated via shouldEmit before constructing the event.
+func (s Service) insertMeta(ctx context.Context, e events.Event) {
+	if err := s.Store.InsertEvent(ctx, e); err != nil && s.Logger != nil {
+		s.Logger.Error("emit failed", "err", err, "type", string(e.Type))
+	}
+}
+
+// emitReconcileRan writes the verbose-tier per-cycle metadata event.
+// SW-AGENT-30 Phase 4.4.
+func (s Service) emitReconcileRan(ctx context.Context, totalRecovered int, duration time.Duration, snapshotsTaken int) {
+	if !s.shouldEmit(events.TypeReconcileRan) {
+		return
+	}
+	pj, _ := json.Marshal(struct {
+		SchemaVersion   int   `json:"schema_version"`
+		DurationMS      int64 `json:"duration_ms"`
+		EventsRecovered int   `json:"events_recovered"`
+		SnapshotsTaken  int   `json:"snapshots_taken"`
+	}{1, duration.Milliseconds(), totalRecovered, snapshotsTaken})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeReconcileRan,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceReconciler,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	})
+}
+
+// emitReconcileDriftDetected fires when a single reconcile pass
+// recovers more events than the configured threshold — a signal that
+// the watcher path is missing events at a concerning rate.
+// SW-AGENT-30 Phase 4.4.
+func (s Service) emitReconcileDriftDetected(ctx context.Context, watchRoot string, recovered int) {
+	threshold := s.EmitThresholds["reconcile_drift"]
+	if threshold <= 0 || recovered <= threshold {
+		return
+	}
+	if !s.shouldEmit(events.TypeReconcileDriftDetected) {
+		return
+	}
+	pj, _ := json.Marshal(struct {
+		SchemaVersion int    `json:"schema_version"`
+		WatchRoot     string `json:"watch_root,omitempty"`
+		Recovered     int    `json:"recovered"`
+		Threshold     int    `json:"threshold"`
+	}{1, watchRoot, recovered, threshold})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeReconcileDriftDetected,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceReconciler,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+		WatchRoot:   watchRoot,
+	})
+}
+
+// emitRetentionRan writes the per-cycle retention summary so compliance/
+// audit consumers can prove "data was deleted on schedule." Standard tier.
+// SW-AGENT-30 Phase 4.5.
+func (s Service) emitRetentionRan(ctx context.Context, pruned map[string]int64, duration time.Duration, retentionDays int) {
+	if !s.shouldEmit(events.TypeRetentionRan) {
+		return
+	}
+	pj, _ := json.Marshal(struct {
+		SchemaVersion   int   `json:"schema_version"`
+		EventsPruned    int64 `json:"events_pruned"`
+		DigestsPruned   int64 `json:"digests_pruned"`
+		SnapshotsPruned int64 `json:"snapshots_pruned"`
+		ActorsPruned    int64 `json:"actors_pruned"`
+		IntentsPruned   int64 `json:"intents_pruned"`
+		LeasesPruned    int64 `json:"leases_pruned"`
+		DurationMS      int64 `json:"duration_ms"`
+		RetentionDays   int   `json:"retention_days"`
+	}{
+		SchemaVersion:   1,
+		EventsPruned:    pruned["events"],
+		DigestsPruned:   pruned["digests"],
+		SnapshotsPruned: pruned["snapshots"], // not tracked by us yet; reads as 0
+		ActorsPruned:    pruned["actors"],
+		IntentsPruned:   pruned["intents"],
+		LeasesPruned:    pruned["leases"],
+		DurationMS:      duration.Milliseconds(),
+		RetentionDays:   retentionDays,
+	})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeRetentionRan,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceRetention,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	})
+}
+
+// emitFailedThreshold fires when the failed-event count exceeds
+// emit_thresholds.events_failed. v1 emits per cycle (not rising-edge);
+// a sustained failure fires once per ~30-min reconcile cycle.
+// SW-AGENT-30 Phase 4.6.
+func (s Service) emitFailedThreshold(ctx context.Context, count int) {
+	threshold := s.EmitThresholds["events_failed"]
+	if threshold <= 0 || count <= threshold {
+		return
+	}
+	if !s.shouldEmit(events.TypeEventsFailedThreshold) {
+		return
+	}
+	pj, _ := json.Marshal(struct {
+		SchemaVersion int `json:"schema_version"`
+		Count         int `json:"count"`
+		Threshold     int `json:"threshold"`
+	}{1, count, threshold})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeEventsFailedThreshold,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceDaemon,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	})
+}
+
+// emitStuckDetected fires when count of `processing`-status events
+// older than 5 min exceeds emit_thresholds.events_stuck. v1 per-cycle.
+// SW-AGENT-30 Phase 4.6.
+func (s Service) emitStuckDetected(ctx context.Context, count int) {
+	threshold := s.EmitThresholds["events_stuck"]
+	if threshold <= 0 || count <= threshold {
+		return
+	}
+	if !s.shouldEmit(events.TypeEventsStuckDetected) {
+		return
+	}
+	pj, _ := json.Marshal(struct {
+		SchemaVersion int `json:"schema_version"`
+		Count         int `json:"count"`
+		Threshold     int `json:"threshold"`
+	}{1, count, threshold})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeEventsStuckDetected,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceDaemon,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	})
+}
+
+// newID returns a fresh meta-event id. Local helper — duplicated from
+// app.go's newMetaEventID rather than imported to keep the reconcile
+// package free of an app-package dependency (would be circular). Same
+// shape as everywhere else: "evt_" + 16 hex chars.
+func newID() string {
+	var b [8]byte
+	if _, err := osReadRand(b[:]); err != nil {
+		return fmt.Sprintf("evt_%016x", time.Now().UnixNano())
+	}
+	const hex = "0123456789abcdef"
+	out := make([]byte, 16)
+	for i, by := range b {
+		out[i*2] = hex[by>>4]
+		out[i*2+1] = hex[by&0x0f]
+	}
+	return "evt_" + string(out)
+}
+
+var osReadRand = func(b []byte) (int, error) {
+	f, err := os.Open("/dev/urandom")
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	return io.ReadFull(f, b)
 }
