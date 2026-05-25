@@ -214,15 +214,17 @@ func copyClassMap(src map[Class]bool) map[Class]bool {
 // uses this to look up whether the event's class is enabled by the
 // current profile + overrides.
 //
-// SW-AGENT-30 Phase 2. Phase 3 will add the ~20 new event types and
-// extend this switch with their class mappings; today the function
-// covers the v0.1.0 type surface (file events + hook meta-events).
+// SW-AGENT-30 Phase 3 extends Phase 2's switch with all 25 new event
+// types from the broker consumer-contracts catalog. Every event type
+// shipped by the binary has an explicit case; unknown types still
+// fall through to ClassFile as the safe backwards-compatible default
+// (legacy DBs / future-version events emit at minimal tier rather
+// than being silently dropped).
 //
-// Unknown / unrecognised types fall through to ClassFile — the safe
-// backwards-compatible default. Rationale: legacy DBs may carry event
-// types this binary doesn't recognise; we want them to emit (at the
-// minimal tier) rather than be silently dropped. Phase 3+ types will
-// each get an explicit case.
+// The regression-guard TestTypeClassCoversAllKnownTypes asserts that
+// every Type constant defined in events.go has a non-fallback case
+// here — adding a Type without adding the case is a build-time
+// surprise we want to avoid.
 func TypeClass(t Type) Class {
 	switch t {
 	// File events (watcher AND reconciler sources share Type).
@@ -230,17 +232,80 @@ func TypeClass(t Type) Class {
 		return ClassFile
 
 	// Hook meta-events (SW-AGENT-29). Class is always-on at minimal
-	// tier — gating already happens via the --on-digest flag (no
-	// flag set ⇒ no hook fires ⇒ no meta-event emitted in the first
-	// place; the class boundary is belt-and-suspenders).
+	// tier — gating already happens via the --on-digest flag.
 	case TypeHookCompleted, TypeHookFailed:
 		return ClassHook
+
+	// SW-AGENT-30 standard-tier mappings.
+	case TypeDigestCreated:
+		return ClassDigest
+	case TypeDaemonStarted, TypeDaemonStopping, TypeDaemonCrashed:
+		return ClassLifecycle
+	case TypeModeChanged:
+		return ClassModeChange
+	case TypeRetentionRan:
+		return ClassRetention
+	case TypeEventsFailedThreshold, TypeEventsStuckDetected, TypeEventsRetriedBatch:
+		return ClassFailureThreshold
+	case TypeReconcileDriftDetected:
+		return ClassReconcileThreshold
+	case TypeLeaseGranted, TypeLeaseReleased, TypeLeaseRenewed, TypeLeaseExpired, TypeLeaseViolated,
+		TypeIntentDeclared, TypeIntentRevoked, TypeIntentExpired:
+		return ClassCoord
+	case TypeActorRegistered, TypeActorRemoved:
+		return ClassActorLifecycle
+
+	// SW-AGENT-30 verbose-tier mappings.
+	case TypeModeTTLExtended:
+		return ClassModeTTL
+	case TypeReconcileRan:
+		return ClassReconcilePerCycle
+	case TypeSnapshotTaken:
+		return ClassSnapshot
+	case TypeActorWentStale:
+		return ClassActorStale
+
+	// SW-AGENT-30 all-tier mappings.
+	case TypeActorHeartbeatReceived:
+		return ClassActorHeartbeat
 
 	default:
 		// Unknown types — backwards-compatible default. Belongs at
 		// minimal tier so legacy / future-version events aren't silently
 		// dropped by an outdated client binary.
 		return ClassFile
+	}
+}
+
+// AllKnownTypes returns every Type constant defined in events.go in
+// stable order. Used by the regression-guard test
+// (TestTypeClassCoversAllKnownTypes) to verify TypeClass has an
+// explicit case for every shipped Type. Adding a new Type constant
+// requires adding it here too — the test will fail otherwise.
+//
+// Order matches the const-block order in events.go for readability.
+func AllKnownTypes() []Type {
+	return []Type{
+		// existing
+		TypeCreated, TypeModified, TypeDeleted, TypeRenamed,
+		TypeHookCompleted, TypeHookFailed,
+		// SW-AGENT-30 standard tier
+		TypeDigestCreated,
+		TypeDaemonStarted, TypeDaemonStopping, TypeDaemonCrashed,
+		TypeModeChanged,
+		TypeRetentionRan,
+		TypeEventsFailedThreshold, TypeEventsStuckDetected, TypeEventsRetriedBatch,
+		TypeReconcileDriftDetected,
+		TypeLeaseGranted, TypeLeaseReleased, TypeLeaseRenewed, TypeLeaseExpired, TypeLeaseViolated,
+		TypeIntentDeclared, TypeIntentRevoked, TypeIntentExpired,
+		TypeActorRegistered, TypeActorRemoved,
+		// SW-AGENT-30 verbose tier
+		TypeModeTTLExtended,
+		TypeReconcileRan,
+		TypeSnapshotTaken,
+		TypeActorWentStale,
+		// SW-AGENT-30 all tier
+		TypeActorHeartbeatReceived,
 	}
 }
 

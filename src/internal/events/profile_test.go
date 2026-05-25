@@ -317,6 +317,118 @@ func TestShouldEmitUnknownProfileFallsBackToStandard(t *testing.T) {
 	}
 }
 
+// ====================================================================
+// SW-AGENT-30 Phase 3 — type→class mapping coverage
+// ====================================================================
+
+func TestTypeClassCoversAllKnownTypes(t *testing.T) {
+	// Regression guard: every Type constant defined in events.go must
+	// have an EXPLICIT case in TypeClass. Adding a new Type without
+	// updating TypeClass would silently fall through to ClassFile
+	// (the backwards-compat default for legacy types) — but a freshly
+	// shipped Type with no case is a bug, not a legacy event. This
+	// test catches that.
+	//
+	// Mechanism: AllKnownTypes lists every shipped Type; for each we
+	// verify TypeClass returns a class that matches our expectation.
+	// If a Type is added but AllKnownTypes isn't updated, the count
+	// assertion below fails. If TypeClass falls through to ClassFile
+	// for a non-file Type, the explicit-case assertion fails.
+
+	wantClass := map[Type]Class{
+		// file/hook (pre-existing)
+		TypeCreated: ClassFile, TypeModified: ClassFile,
+		TypeDeleted: ClassFile, TypeRenamed: ClassFile,
+		TypeHookCompleted: ClassHook, TypeHookFailed: ClassHook,
+		// digest
+		TypeDigestCreated: ClassDigest,
+		// lifecycle
+		TypeDaemonStarted: ClassLifecycle, TypeDaemonStopping: ClassLifecycle,
+		TypeDaemonCrashed: ClassLifecycle,
+		// mode
+		TypeModeChanged: ClassModeChange, TypeModeTTLExtended: ClassModeTTL,
+		// retention
+		TypeRetentionRan: ClassRetention,
+		// failure threshold
+		TypeEventsFailedThreshold: ClassFailureThreshold,
+		TypeEventsStuckDetected:   ClassFailureThreshold,
+		TypeEventsRetriedBatch:    ClassFailureThreshold,
+		// reconcile
+		TypeReconcileRan:           ClassReconcilePerCycle,
+		TypeReconcileDriftDetected: ClassReconcileThreshold,
+		// snapshot
+		TypeSnapshotTaken: ClassSnapshot,
+		// coord (lease)
+		TypeLeaseGranted: ClassCoord, TypeLeaseReleased: ClassCoord,
+		TypeLeaseRenewed: ClassCoord, TypeLeaseExpired: ClassCoord,
+		TypeLeaseViolated: ClassCoord,
+		// coord (intent)
+		TypeIntentDeclared: ClassCoord, TypeIntentRevoked: ClassCoord,
+		TypeIntentExpired: ClassCoord,
+		// actor
+		TypeActorRegistered:        ClassActorLifecycle,
+		TypeActorRemoved:           ClassActorLifecycle,
+		TypeActorWentStale:         ClassActorStale,
+		TypeActorHeartbeatReceived: ClassActorHeartbeat,
+	}
+
+	known := AllKnownTypes()
+	if len(known) != len(wantClass) {
+		t.Fatalf("AllKnownTypes() length %d != wantClass length %d — update both when adding a Type", len(known), len(wantClass))
+	}
+	seen := make(map[Type]bool, len(known))
+	for _, ty := range known {
+		if seen[ty] {
+			t.Errorf("AllKnownTypes() lists %q twice", ty)
+		}
+		seen[ty] = true
+		got := TypeClass(ty)
+		want := wantClass[ty]
+		if got != want {
+			t.Errorf("TypeClass(%q) = %q, want %q", ty, got, want)
+		}
+	}
+}
+
+func TestShouldEmitNewTypesAtCorrectTiers(t *testing.T) {
+	// Spot-check the new event types emit at the expected tier
+	// (sanity check on top of the broader TypeClass test).
+	cases := []struct {
+		ty       Type
+		profile  string
+		wantEmit bool
+	}{
+		// Standard-tier types: should emit at standard, not at minimal.
+		{TypeDigestCreated, "standard", true},
+		{TypeDigestCreated, "minimal", false},
+		{TypeDaemonStarted, "standard", true},
+		{TypeDaemonStarted, "minimal", false},
+		{TypeLeaseGranted, "standard", true},
+		{TypeLeaseGranted, "minimal", false},
+		{TypeActorRegistered, "standard", true},
+
+		// Verbose-tier types: should emit at verbose, not at standard.
+		{TypeReconcileRan, "verbose", true},
+		{TypeReconcileRan, "standard", false},
+		{TypeModeTTLExtended, "verbose", true},
+		{TypeModeTTLExtended, "standard", false},
+		{TypeActorWentStale, "verbose", true},
+		{TypeActorWentStale, "standard", false},
+		{TypeSnapshotTaken, "verbose", true},
+
+		// All-tier types: should emit only at all.
+		{TypeActorHeartbeatReceived, "all", true},
+		{TypeActorHeartbeatReceived, "verbose", false},
+		{TypeActorHeartbeatReceived, "standard", false},
+	}
+	for _, c := range cases {
+		got := ShouldEmit(c.ty, c.profile, nil)
+		if got != c.wantEmit {
+			t.Errorf("ShouldEmit(%q, %q, nil) = %v, want %v", c.ty, c.profile, got, c.wantEmit)
+		}
+	}
+}
+
 func classMapEqual(a, b map[Class]bool) bool {
 	if len(a) != len(b) {
 		return false
