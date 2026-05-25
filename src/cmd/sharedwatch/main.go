@@ -1184,6 +1184,20 @@ func handleIntent(ctx context.Context, a *app.App, args []string) {
 		}); err != nil {
 			fatal(err)
 		}
+		// SW-AGENT-30 Phase 4.7: intent.declared meta-event for stream
+		// subscribers (peer-coord bots, audit archivers). Fires after
+		// the InsertIntent commits — never blocks the user's primary
+		// action even if emission fails.
+		a.EmitMetaEvent(ctx, events.TypeIntentDeclared, events.SourceCoord, map[string]any{
+			"schema_version": 1,
+			"intent_id":      id,
+			"actor":          *actor,
+			"path_glob":      pathGlob,
+			"task":           *task,
+			"intent_text":    *intentText,
+			"ttl_secs":       int64(ttl.Seconds()),
+			"expires_at":     now.Add(*ttl),
+		}, "")
 		fmt.Printf("intent %s expires %s\n", id, now.Add(*ttl).Format(time.RFC3339))
 	case "list":
 		fs := flag.NewFlagSet("intent list", flag.ExitOnError)
@@ -1228,6 +1242,12 @@ func handleIntent(ctx context.Context, a *app.App, args []string) {
 		if err := a.Store.RevokeIntent(ctx, args[1]); err != nil {
 			fatal(err)
 		}
+		// SW-AGENT-30 Phase 4.7: intent.revoked meta-event.
+		a.EmitMetaEvent(ctx, events.TypeIntentRevoked, events.SourceCoord, map[string]any{
+			"schema_version": 1,
+			"intent_id":      args[1],
+			"reason":         "explicit",
+		}, "")
 		fmt.Printf("revoked %s\n", args[1])
 	default:
 		fatal(fmt.Errorf("unknown intent subcommand: %s (expected: declare | list | revoke)", args[0]))
@@ -1284,6 +1304,16 @@ func handleLease(ctx context.Context, a *app.App, args []string) {
 		}); err != nil {
 			fatal(err)
 		}
+		// SW-AGENT-30 Phase 4.7: lease.granted meta-event.
+		a.EmitMetaEvent(ctx, events.TypeLeaseGranted, events.SourceCoord, map[string]any{
+			"schema_version": 1,
+			"lease_id":       id,
+			"actor":          *actor,
+			"path_glob":      pathGlob,
+			"ttl_secs":       int64(ttl.Seconds()),
+			"expires_at":     now.Add(*ttl),
+			"exclusive":      *exclusive,
+		}, "")
 		resp := map[string]any{"lease_id": id, "granted": true, "expires_at": now.Add(*ttl).Format(time.RFC3339Nano)}
 		if len(conflicts) > 0 {
 			resp["conflict_with"] = conflicts
@@ -1299,6 +1329,11 @@ func handleLease(ctx context.Context, a *app.App, args []string) {
 		if err := a.Store.ReleaseLease(ctx, args[1]); err != nil {
 			fatal(err)
 		}
+		// SW-AGENT-30 Phase 4.7: lease.released meta-event.
+		a.EmitMetaEvent(ctx, events.TypeLeaseReleased, events.SourceCoord, map[string]any{
+			"schema_version": 1,
+			"lease_id":       args[1],
+		}, "")
 		fmt.Printf("released %s\n", args[1])
 	case "renew":
 		if len(args) < 2 {
@@ -1311,6 +1346,14 @@ func handleLease(ctx context.Context, a *app.App, args []string) {
 		if err != nil {
 			fatal(err)
 		}
+		// SW-AGENT-30 Phase 4.7: lease.renewed meta-event.
+		a.EmitMetaEvent(ctx, events.TypeLeaseRenewed, events.SourceCoord, map[string]any{
+			"schema_version": 1,
+			"lease_id":       r.LeaseID,
+			"actor":          r.ActorID,
+			"new_expires_at": r.ExpiresAt,
+			"renewal_count":  r.RenewalCount,
+		}, "")
 		fmt.Printf("renewed %s; renewal_count=%d; expires=%s\n", r.LeaseID, r.RenewalCount, r.ExpiresAt.Format(time.RFC3339))
 	case "list":
 		fs := flag.NewFlagSet("lease list", flag.ExitOnError)
@@ -1448,6 +1491,10 @@ func handleActorHeartbeat(ctx context.Context, a *app.App, args []string) {
 			fatal(fmt.Errorf("--metadata must be a JSON object: %w", err))
 		}
 	}
+	// SW-AGENT-30 Phase 4.9: detect first-heartbeat to emit actor.registered.
+	// Done BEFORE the upsert so the existence check is meaningful (after
+	// upsert the actor always exists).
+	_, existed, _ := a.Store.GetActor(ctx, actorID)
 	if err := a.Store.UpsertActorHeartbeat(ctx, db.ActorRecord{
 		ActorID:      actorID,
 		Label:        *label,
@@ -1457,6 +1504,24 @@ func handleActorHeartbeat(ctx context.Context, a *app.App, args []string) {
 	}); err != nil {
 		fatal(err)
 	}
+	if !existed {
+		// First-ever heartbeat for this actor_id → actor.registered (standard).
+		a.EmitMetaEvent(ctx, events.TypeActorRegistered, events.SourceActor, map[string]any{
+			"schema_version": 1,
+			"actor":          actorID,
+			"kind":           *kind,
+			"focus":          *focus,
+			"first_seen_at":  time.Now().UTC(),
+		}, "")
+	}
+	// Every heartbeat → actor.heartbeat_received (all tier; chatty by
+	// design — only audit-style consumers opt in via emit_profile=all).
+	a.EmitMetaEvent(ctx, events.TypeActorHeartbeatReceived, events.SourceActor, map[string]any{
+		"schema_version": 1,
+		"actor":          actorID,
+		"kind":           *kind,
+		"focus":          *focus,
+	}, "")
 	fmt.Printf("heartbeat %s\n", actorID)
 }
 

@@ -147,14 +147,24 @@ func (s Service) reconcileRoot(ctx context.Context, root config.WatchRoot) (int,
 	leases, _ := s.Store.ListLeases(ctx, db.LeaseFilter{})
 	for _, e := range evs {
 		watcher.EmitLeaseAdvisoryIfMismatch(e, leases)
+		// SW-AGENT-30 Phase 4.8: mirror the watcher's journal-side
+		// emission so reconciler-source events also produce
+		// lease.violated meta-events. Both paths use the same
+		// detection (watcher.LeaseViolationsFor) for consistency.
+		s.emitLeaseViolations(ctx, e, leases)
 		if err := s.Store.InsertOrCoalesceEvent(ctx, e, s.Window); err != nil {
 			return count, err
 		}
 		count++
 	}
+	snapshotStart := time.Now()
 	if err := s.Store.SaveSnapshot(ctx, fmt.Sprintf("snp_reconcile_%s_%d", root.Label, time.Now().UTC().UnixNano()), watcher.SnapshotSourceReconciler, root.Label, current); err != nil {
 		return count, err
 	}
+	// SW-AGENT-30 Phase 4.10: snapshot.taken (verbose tier). Per-root,
+	// per-reconcile-pass. Useful for ops dashboards tracking reconcile
+	// cost; mostly low-signal in normal operation.
+	s.emitSnapshotTaken(ctx, root.Label, len(current.Files), time.Since(snapshotStart))
 	_, _ = s.Store.PruneOldSnapshots(ctx, watcher.SnapshotSourceReconciler, root.Label, 5)
 	return count, nil
 }
@@ -201,6 +211,23 @@ func (s Service) postPasses(ctx context.Context) error {
 		pruned["digests"] = n
 	}
 	if s.ActorTTL > 0 {
+		// SW-AGENT-30 Phase 4.9: enumerate stale + about-to-be-removed
+		// actors so we can emit one event per state-change. Same
+		// list-then-prune pattern as lease.expired (4.7).
+		nowCheck := time.Now().UTC()
+		if actors, e := s.Store.ListActors(ctx); e == nil {
+			for _, a := range actors {
+				age := nowCheck.Sub(a.LastHeartbeat)
+				switch {
+				case age > 2*s.ActorTTL:
+					// About to be pruned. Emit actor.removed (standard).
+					s.emitActorRemoved(ctx, a, age)
+				case age > s.ActorTTL:
+					// Stale but not yet expired. Emit actor.went_stale (verbose).
+					s.emitActorWentStale(ctx, a, age)
+				}
+			}
+		}
 		if n, e := s.Store.PruneStaleActors(ctx, 2*s.ActorTTL); e == nil {
 			pruned["actors"] = n
 		}
@@ -215,6 +242,29 @@ func (s Service) postPasses(ctx context.Context) error {
 		})
 	}
 	// SW-AGENT-12: prune expired intents + leases each pass.
+	// SW-AGENT-30 Phase 4.7: list-then-prune for the .expired events.
+	// We enumerate expired rows first (so we can emit one event per
+	// pruned row), then call the existing prune (which deletes the
+	// same rows). The list+prune is NOT atomic — a row that expired
+	// AND was re-granted between our list and the prune is technically
+	// possible but vanishingly rare (would require sub-millisecond
+	// timing). Worst case: one extra lease.expired event for a row
+	// that was about to get re-granted; consumers should be idempotent.
+	now := time.Now().UTC()
+	if intents, e := s.Store.ListIntents(ctx, db.IntentFilter{IncludeExpired: true}); e == nil {
+		for _, in := range intents {
+			if in.ExpiresAt.Before(now) {
+				s.emitIntentExpired(ctx, in)
+			}
+		}
+	}
+	if leases, e := s.Store.ListLeases(ctx, db.LeaseFilter{IncludeExpired: true}); e == nil {
+		for _, l := range leases {
+			if l.ExpiresAt.Before(now) {
+				s.emitLeaseExpired(ctx, l)
+			}
+		}
+	}
 	if n, e := s.Store.PruneExpiredIntents(ctx); e == nil {
 		pruned["intents"] = n
 	}
@@ -390,6 +440,161 @@ func (s Service) emitStuckDetected(ctx context.Context, count int) {
 		Type:        events.TypeEventsStuckDetected,
 		Timestamp:   time.Now().UTC(),
 		Source:      events.SourceDaemon,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	})
+}
+
+// emitLeaseViolations is reconcile's mirror of watcher.Service.emitLeaseViolations.
+// Both call sites (watcher.scanRoot, reconcile.reconcileRoot) need to
+// emit the same journal event when a file change lands inside another
+// actor's lease — having matching methods means the violation shape
+// is identical regardless of which subsystem detected it.
+// SW-AGENT-30 Phase 4.8.
+func (s Service) emitLeaseViolations(ctx context.Context, e events.Event, leases []db.LeaseRecord) {
+	if !s.shouldEmit(events.TypeLeaseViolated) {
+		return
+	}
+	violators := watcher.LeaseViolationsFor(e, leases)
+	if len(violators) == 0 {
+		return
+	}
+	violator := events.ExtractActor(e.PayloadJSON)
+	for _, l := range violators {
+		payload, err := json.Marshal(map[string]any{
+			"schema_version":    1,
+			"violator_actor":    violator,
+			"lease_actor":       l.ActorID,
+			"lease_id":          l.LeaseID,
+			"path_glob":         l.PathGlob,
+			"observed_event_id": e.ID,
+			"lease_expires_at":  l.ExpiresAt,
+		})
+		if err != nil {
+			continue
+		}
+		s.insertMeta(ctx, events.Event{
+			ID:          newID(),
+			Type:        events.TypeLeaseViolated,
+			Timestamp:   time.Now().UTC(),
+			Source:      events.SourceReconciler,
+			Status:      events.StatusProcessed,
+			PayloadJSON: string(payload),
+			WatchRoot:   e.WatchRoot,
+			RelPath:     e.RelPath,
+		})
+	}
+}
+
+// emitSnapshotTaken writes snapshot.taken (verbose, ClassSnapshot)
+// for each per-root snapshot the reconciler captures. SW-AGENT-30
+// Phase 4.10.
+func (s Service) emitSnapshotTaken(ctx context.Context, watchRoot string, fileCount int, duration time.Duration) {
+	if !s.shouldEmit(events.TypeSnapshotTaken) {
+		return
+	}
+	pj, _ := json.Marshal(map[string]any{
+		"schema_version": 1,
+		"watch_root":     watchRoot,
+		"file_count":     fileCount,
+		"duration_ms":    duration.Milliseconds(),
+	})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeSnapshotTaken,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceReconciler,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+		WatchRoot:   watchRoot,
+	})
+}
+
+// emitActorRemoved writes actor.removed (standard, ClassActorLifecycle)
+// for an actor that's about to be pruned past 2× ActorTTL. SW-AGENT-30
+// Phase 4.9.
+func (s Service) emitActorRemoved(ctx context.Context, a db.ActorRecord, age time.Duration) {
+	if !s.shouldEmit(events.TypeActorRemoved) {
+		return
+	}
+	pj, _ := json.Marshal(map[string]any{
+		"schema_version":     1,
+		"actor":              a.ActorID,
+		"last_heartbeat":     a.LastHeartbeat,
+		"removed_after_secs": int64(age.Seconds()),
+	})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeActorRemoved,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceActor,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	})
+}
+
+// emitActorWentStale writes actor.went_stale (verbose, ClassActorStale)
+// for an actor whose last heartbeat is past ActorTTL but not yet past
+// 2× ActorTTL (the prune threshold). SW-AGENT-30 Phase 4.9.
+func (s Service) emitActorWentStale(ctx context.Context, a db.ActorRecord, age time.Duration) {
+	if !s.shouldEmit(events.TypeActorWentStale) {
+		return
+	}
+	pj, _ := json.Marshal(map[string]any{
+		"schema_version":   1,
+		"actor":            a.ActorID,
+		"last_heartbeat":   a.LastHeartbeat,
+		"stale_since_secs": int64(age.Seconds()),
+	})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeActorWentStale,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceActor,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	})
+}
+
+// emitLeaseExpired writes lease.expired (standard, ClassCoord) for a
+// lease that's about to be pruned. SW-AGENT-30 Phase 4.7.
+func (s Service) emitLeaseExpired(ctx context.Context, l db.LeaseRecord) {
+	if !s.shouldEmit(events.TypeLeaseExpired) {
+		return
+	}
+	pj, _ := json.Marshal(map[string]any{
+		"schema_version": 1,
+		"lease_id":       l.LeaseID,
+		"actor":          l.ActorID,
+		"path_glob":      l.PathGlob,
+	})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeLeaseExpired,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceCoord,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+	})
+}
+
+// emitIntentExpired writes intent.expired (standard, ClassCoord) for
+// an intent that's about to be pruned. SW-AGENT-30 Phase 4.7.
+func (s Service) emitIntentExpired(ctx context.Context, in db.IntentRecord) {
+	if !s.shouldEmit(events.TypeIntentExpired) {
+		return
+	}
+	pj, _ := json.Marshal(map[string]any{
+		"schema_version": 1,
+		"intent_id":      in.IntentID,
+		"actor":          in.ActorID,
+		"reason":         "expired",
+	})
+	s.insertMeta(ctx, events.Event{
+		ID:          newID(),
+		Type:        events.TypeIntentExpired,
+		Timestamp:   time.Now().UTC(),
+		Source:      events.SourceCoord,
 		Status:      events.StatusProcessed,
 		PayloadJSON: string(pj),
 	})

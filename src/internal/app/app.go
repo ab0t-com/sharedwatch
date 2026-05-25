@@ -76,6 +76,10 @@ func NewWithLogger(ctx context.Context, cfg config.Config, logger *slog.Logger) 
 			HashEnabled: cfg.HashEnabled, HashMaxSize: cfg.HashMaxSize,
 			ProducerID:  cfg.ProducerID,
 			PayloadJSON: cfg.PayloadJSON,
+			// SW-AGENT-30 Phase 4.8: lease.violated emission needs the
+			// emit decision plumbed through.
+			EmitProfile:   cfg.EmitProfile,
+			EmitOverrides: cfg.EmitOverrides,
 		},
 		Consumer: consumer.Service{Store: store},
 		Reconcile: reconcile.Service{
@@ -491,6 +495,44 @@ var osReadRand = func(b []byte) (int, error) {
 	}
 	defer f.Close()
 	return io.ReadFull(f, b)
+}
+
+// EmitMetaEvent is the shared gate-and-insert primitive used by every
+// Phase 4.7+ emit site (coord, lease.violated, actor, snapshot). It
+// gates via ShouldEmit, marshals the payload, inserts, and logs on
+// failure. Exported so handlers in cmd/sharedwatch/main.go can use
+// the same path as the internal callers.
+//
+// SW-AGENT-30 Phase 4.7. Existing emit helpers (emitDigestCreated,
+// emitDaemonStarted/Stopping/Crashed, emitModeChanged, emitModeTTLExtended)
+// predate this helper and use their own inline ShouldEmit+InsertEvent
+// boilerplate; they could be refactored to use this helper in a future
+// cleanup pass but it's not blocking.
+//
+// Caller passes the resolved Type, Source, an arbitrary `payload`
+// (will be json.Marshal'd), and an optional watchRoot label. Empty
+// watchRoot is fine for daemon-wide events.
+func (a *App) EmitMetaEvent(ctx context.Context, eventType events.Type, source events.Source, payload any, watchRoot string) {
+	if !events.ShouldEmit(eventType, a.Cfg.EmitProfile, a.Cfg.EmitOverrides) {
+		return
+	}
+	pj, err := json.Marshal(payload)
+	if err != nil {
+		a.Logger.Error("emit marshal failed", "err", err, "type", string(eventType))
+		return
+	}
+	e := events.Event{
+		ID:          newMetaEventID(),
+		Type:        eventType,
+		Timestamp:   time.Now().UTC(),
+		Source:      source,
+		Status:      events.StatusProcessed,
+		PayloadJSON: string(pj),
+		WatchRoot:   watchRoot,
+	}
+	if err := a.Store.InsertEvent(ctx, e); err != nil {
+		a.Logger.Error("emit insert failed", "err", err, "type", string(eventType))
+	}
 }
 
 // emitDaemonStarted writes a `daemon.started` event into the journal.

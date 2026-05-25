@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"path"
@@ -42,6 +43,10 @@ type Service struct {
 	// does not already carry a payload. Synthetic emits via
 	// EmitSyntheticWithPayload still win when they pass an explicit payload.
 	PayloadJSON string
+	// SW-AGENT-30 Phase 4.8: emit-decision fields for the lease.violated
+	// meta-event. Empty profile → "standard" fallback per events.ShouldEmit.
+	EmitProfile   string
+	EmitOverrides map[string]bool
 }
 
 // effectiveRoots returns the per-iteration roots used by ScanAndQueue. When
@@ -210,6 +215,10 @@ func (s Service) scanRoot(ctx context.Context, source string, root config.WatchR
 	leases, _ := s.Store.ListLeases(ctx, db.LeaseFilter{}) // active leases only
 	for _, e := range evs {
 		emitLeaseAdvisoryIfMismatch(e, leases)
+		// SW-AGENT-30 Phase 4.8: also write lease.violated meta-event
+		// for stream consumers. The slog.Warn above stays (log surface);
+		// the journal event is the API surface.
+		s.emitLeaseViolations(ctx, e, leases)
 		if err := s.Store.InsertOrCoalesceEvent(ctx, e, s.CoalesceWindow); err != nil {
 			return 0, err
 		}
@@ -236,28 +245,101 @@ func EmitLeaseAdvisoryIfMismatch(e events.Event, leases []db.LeaseRecord) {
 // back off; non-cooperative peers are unaffected (the FS write already
 // happened by the time the watcher sees it). For hard guarantees, use a
 // real concurrency control mechanism.
+//
+// Pure logging — does NOT emit a journal event. The journal-side signal is
+// emitted separately via Service.emitLeaseViolations (SW-AGENT-30 Phase 4.8)
+// so callers that don't have the emit-config (e.g. unit tests, the legacy
+// EmitLeaseAdvisoryIfMismatch entry point) can still use this for logging.
 func emitLeaseAdvisoryIfMismatch(e events.Event, leases []db.LeaseRecord) {
-	if len(leases) == 0 {
-		return
-	}
-	actor := events.ExtractActor(e.PayloadJSON)
-	for _, l := range leases {
-		if l.ActorID == actor {
-			continue // owner editing their own leased path is the happy path
-		}
-		if !db.LeaseGlobMatchesPath(l.PathGlob, e.RelPath) {
-			continue
-		}
+	for _, l := range violatingLeases(e, leases) {
 		slog.Warn("event lands on path covered by another actor's lease",
 			"event_id", e.ID,
 			"rel_path", e.RelPath,
 			"watch_root", e.WatchRoot,
-			"event_actor", actor,
+			"event_actor", events.ExtractActor(e.PayloadJSON),
 			"lease_id", l.LeaseID,
 			"lease_actor", l.ActorID,
 			"lease_path_glob", l.PathGlob,
 			"lease_expires_at", l.ExpiresAt.Format(time.RFC3339),
 		)
+	}
+}
+
+// LeaseViolationsFor returns the subset of `leases` whose path-glob
+// covers e.RelPath AND whose actor differs from the event's actor.
+// Pure function — used by both emitLeaseAdvisoryIfMismatch (logging),
+// Service.emitLeaseViolations (watcher journal emit), and
+// reconcile.Service.emitLeaseViolations (reconcile journal emit) so
+// the violation-detection logic lives in exactly one place.
+// SW-AGENT-30 Phase 4.8.
+func LeaseViolationsFor(e events.Event, leases []db.LeaseRecord) []db.LeaseRecord {
+	return violatingLeases(e, leases)
+}
+
+// violatingLeases — package-private implementation that the logging
+// helper uses. Kept private so callers that need a stable public API
+// use LeaseViolationsFor.
+func violatingLeases(e events.Event, leases []db.LeaseRecord) []db.LeaseRecord {
+	if len(leases) == 0 {
+		return nil
+	}
+	actor := events.ExtractActor(e.PayloadJSON)
+	var out []db.LeaseRecord
+	for _, l := range leases {
+		if l.ActorID == actor {
+			continue
+		}
+		if !db.LeaseGlobMatchesPath(l.PathGlob, e.RelPath) {
+			continue
+		}
+		out = append(out, l)
+	}
+	return out
+}
+
+// emitLeaseViolations writes a `lease.violated` event into the journal
+// for each violating lease detected by violatingLeases. Gated by
+// ShouldEmit; class is ClassCoord (standard tier, default-on). Both
+// the watcher path AND reconcile path call this (via their own
+// Service struct's matching method) so violation events have one
+// consistent shape.
+//
+// Failure is non-fatal — the watcher must keep processing events
+// regardless of meta-event insert success.
+// SW-AGENT-30 Phase 4.8.
+func (s Service) emitLeaseViolations(ctx context.Context, e events.Event, leases []db.LeaseRecord) {
+	if !events.ShouldEmit(events.TypeLeaseViolated, s.EmitProfile, s.EmitOverrides) {
+		return
+	}
+	violators := violatingLeases(e, leases)
+	if len(violators) == 0 {
+		return
+	}
+	violator := events.ExtractActor(e.PayloadJSON)
+	for _, l := range violators {
+		payload, err := json.Marshal(map[string]any{
+			"schema_version":    1,
+			"violator_actor":    violator,
+			"lease_actor":       l.ActorID,
+			"lease_id":          l.LeaseID,
+			"path_glob":         l.PathGlob,
+			"observed_event_id": e.ID,
+			"lease_expires_at":  l.ExpiresAt,
+		})
+		if err != nil {
+			continue
+		}
+		ev := events.Event{
+			ID:          newID("evt"),
+			Type:        events.TypeLeaseViolated,
+			Timestamp:   time.Now().UTC(),
+			Source:      events.SourceWatcher,
+			Status:      events.StatusProcessed,
+			PayloadJSON: string(payload),
+			WatchRoot:   e.WatchRoot,
+			RelPath:     e.RelPath,
+		}
+		_ = s.Store.InsertEvent(ctx, ev) // best-effort
 	}
 }
 
