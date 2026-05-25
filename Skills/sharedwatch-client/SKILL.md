@@ -238,6 +238,11 @@ For quick scripted execution of the initial-orientation flow, run `scripts/orien
 | "I need an aggregate that isn't a built-in" | `sharedwatch schema` first, then `sharedwatch sql` |
 | "The journal is too big to skim" | start at `status`, narrow with `--path-glob` and `--since` |
 | "Did the daemon's --on-digest hook fire?" (v0.1.0+) | `events list --type hook.completed --type hook.failed --json` — every hook run produces exactly one meta-event. Sidecar stdout/stderr at `<data_dir>/hooks/<digest_id>.{out,err}`. |
+| "What's the daemon's lifecycle / mode history?" (v0.1.1+) | `events list --source daemon --source mode --json --since 24h` — start/stop/crash + mode transitions in one stream. Tier: standard (default). |
+| "Who is doing what right now?" (multi-agent; v0.1.1+) | `events list --source coord --json --since 1h` — lease.granted/.released/.violated + intent.declared/.revoked stream. Filter out own actor with `--payload-key actor --payload-value '!self'` (manual). |
+| "Did data get pruned on schedule?" (v0.1.1+) | `events list --type retention.ran --json --since 7d` — per-cycle pruned counts per resource. Tier: standard. |
+| "Is the daemon healthy?" (v0.1.1+) | `events list --type events.failed_threshold --type events.stuck_detected --type daemon.crashed --since 24h` — threshold-gated alert stream. Default thresholds: 50 failed / 10 stuck. Configurable via `emit_thresholds:` config. |
+| "How do I see fewer events?" / "How do I see MORE?" (v0.1.1+) | `--emit-profile minimal` (file events only; v0.0.x compat) / `--emit-profile verbose` (+ reconcile metadata) / `--emit-profile all` (+ actor heartbeats). Full docs: `docs/guides/event-broker.md`. |
 
 ## When NOT to query
 

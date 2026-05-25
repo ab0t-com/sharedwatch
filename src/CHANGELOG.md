@@ -4,6 +4,70 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/en/1.1.
 
 ## [Unreleased]
 
+## SW-AGENT-30 — event-surface expansion (v0.1.1 candidate)
+
+The events journal becomes a first-class single-host event broker. Default behaviour ships 25 new event types covering daemon lifecycle, mode transitions, coordination, retention, failure thresholds, actor registry, and snapshots — all gated by a new `emit_profile` config so users can dial verbosity from `minimal` (v0.0.x baseline) to `all` (full audit).
+
+Discussion: [`docs/design/event-and-hook-surface-expansion-20260524.md`](../docs/design/event-and-hook-surface-expansion-20260524.md) §0 + [`docs/design/event-broker-consumer-contracts-20260525.md`](../docs/design/event-broker-consumer-contracts-20260525.md). Operator guide: [`docs/guides/event-broker.md`](../docs/guides/event-broker.md). Tasklist: `tickets/tasklist_20260525_015121.md`.
+
+### Principle
+- **Calm contract** applies to HOOKS (push-shape), not EVENTS (pull-shape from a local SQLite table).
+- An event in the journal isn't a signal pushed at a consumer — it's a row that subscribers self-select via cursors.
+- Therefore: emit liberally, let clients filter. Hook surface stays narrow per SW-AGENT-29.
+
+### Added — 25 new event types
+Standard tier (default): `digest.created`, `daemon.started/.stopping/.crashed`, `mode.changed`, `retention.ran`, `events.failed_threshold/.stuck_detected/.retried_batch`, `reconcile.drift_detected`, `lease.granted/.released/.renewed/.expired/.violated`, `intent.declared/.revoked/.expired`, `actor.registered/.removed`.
+Verbose tier: `mode.ttl_extended`, `reconcile.ran`, `snapshot.taken`, `actor.went_stale`.
+All tier: `actor.heartbeat_received`.
+
+Each event has a stable type name, a stable source, a `format_version: 1` payload, and at-least-once delivery semantics. Names are contracts — never renamed once shipped (see broker guide §5).
+
+### Added — 5 new event sources
+`daemon`, `mode`, `coord`, `actor`, `retention`. Existing sources (`watcher`, `reconciler`, `test`, `hook`) unchanged.
+
+### Added — `emit_profile` tier config
+```yaml
+emit_profile: standard          # minimal | standard | verbose | all
+emit_overrides:                 # optional per-class fine-tuning
+  actor_heartbeats: true        # opt INTO a higher-tier class
+  reconcile_per_cycle: false    # opt OUT of a baseline class
+emit_thresholds:                # rising-edge tunables (3 knobs)
+  events_failed: 50
+  events_stuck: 10
+  reconcile_drift: 25
+```
+
+Resolution chain (standard): flag > env > config > default.
+Flags: `--emit-profile <tier>`, `--emit-override <k=v>` (repeatable).
+Env: `SHAREDWATCH_EMIT_PROFILE`, `SHAREDWATCH_EMIT_OVERRIDE=k=v,k=v`.
+Config keys: `emit_profile`, `emit_overrides`, `emit_thresholds`.
+
+`config show --json` surfaces all four (`emit_profile`, `emit_overrides`, `emit_thresholds`, `emit_effective_classes`) — the last is a derived truth table so operators can verify what the daemon actually picked up.
+
+### Added — `internal/events/profile.go`
+Central emission authority. Defines `Class` taxonomy (15 classes), `Profile` constants, `TierClasses(profile)`, `ResolveEffectiveClasses(profile, overrides)`, `IsKnownProfile(profile)`, `TypeClass(type)`, `ShouldEmit(type, profile, overrides)`. Every emit site in the codebase routes through `ShouldEmit`.
+
+### Backwards compatibility
+- `emit_profile: minimal` produces the **exact v0.0.x event surface** — file events from watcher + reconciler, plus hook meta-events (gated by `--on-digest`). Verified by `TestEmitTierMatrix/minimal`.
+- File events emit unconditionally at all tiers. Disabling `ClassFile` via override is technically possible but disables the product's primary signal.
+- All existing config keys / env vars / flags unchanged.
+- `--on-digest` hook surface from SW-AGENT-29 unchanged.
+- All cursor / filter / `events list` semantics unchanged — new event types compose with existing tooling.
+- Pre-existing tests pass; one test (`TestOverviewMultiRoot`) pinned to `emit_profile: minimal` to keep its file-event count assertion focused.
+
+### Validation
+- ~32 new tests across `internal/config`, `internal/events`, `internal/app`. Highlight: `TestEmitTierMatrix` parameterised across all 4 tiers + `TestEmitOverrideMovesClassAcrossTier` for per-class override semantics.
+- Empirical full-tier dogfood: minimal=1 event type, standard=7, verbose=9, all=10 — perfect tier progression.
+- Unknown `emit_profile` names warn to stderr + fall back to `standard` (daemon never bricks on bad config).
+- Unknown class names in `emit_overrides` silently ignored (forward-compat with future class additions).
+
+### Out of scope (deferred to future tickets)
+- Rising-edge gating for failure-threshold events (v1 emits per cycle; rising-edge requires persisted prior-count state).
+- Per-root `emit_profile` (uniform for v1).
+- Per-event-type config (per-class is the granularity).
+- `--on-mode-change`, `--on-startup`, `--on-shutdown` hooks (next tickets — SW-AGENT-31).
+- Snapshot prune count in `retention.ran` (today reads as 0; `PruneOldSnapshots` doesn't return count yet).
+
 ## SW-AGENT-29 — `--on-digest <command>` hook surface (v0.1.0 candidate)
 
 First minor-version bump in the v0.0.x patch series. Implements the design from `docs/design/hooks-discussion-20260524.md` after the user explicitly asked. Tasklist: `tickets/tasklist_20260524_091730.md` (302 lines, 7 phases).
